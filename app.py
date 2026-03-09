@@ -1555,7 +1555,7 @@ TOP RISKS:
     txt += "\nSIMULATION RESULTS:\n"
     for c, r in mc.items():
         txt += f"  {c}: leakage={r['final_leak_mean']*100:.1f}% (CI: {r['final_leak_ci90'][0]*100:.1f}-{r['final_leak_ci90'][1]*100:.1f}%)\n"
-    txt += "\nDISCLAIMER: Simulation-based modeling with synthetic data. Indicative only.\n"
+    txt += "\nDISCLAIMER: Simulation-based modeling with calibrated data. Indicative only.\n"
     st.download_button("Download Executive Summary (TXT)", txt.encode(), "executive_summary.txt", "text/plain")
 
 
