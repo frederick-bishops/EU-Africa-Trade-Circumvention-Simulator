@@ -36,6 +36,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+st.title("EU-Africa Trade Circumvention Simulator")  # Main app title
 # Teal-based color palette
 COLORS = {
     "primary": "#20808D",       # Muted teal
