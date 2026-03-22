@@ -36,25 +36,45 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.title("EU-Africa Trade Circumvention Simulator")  # Main app title
-# Teal-based color palette
+
+# ── Theme detection ──────────────────────────────────────────────────
+def _is_dark_theme() -> bool:
+    try:
+        return st.get_option("theme.base") == "dark"
+    except Exception:
+        return False
+
+_DARK = _is_dark_theme()
+
+# ── Semantic design tokens ───────────────────────────────────────────
+# Light and dark token sets; CSS uses Streamlit vars where possible,
+# Python tokens drive Plotly charts and HTML where CSS vars aren't viable.
+THEME_LIGHT = {
+    "app_bg": "#FAFAF7", "panel_bg": "#FFFFFF", "sidebar_bg": "#F0EDE6",
+    "border": "#D5D0C4", "text_primary": "#1A2332", "text_secondary": "#4A5568",
+    "text_muted": "#718096", "accent": "#20808D", "accent_hover": "#1B6B76",
+    "positive": "#10B981", "negative": "#DC2626", "warning": "#D97706",
+    "chart_paper": "#FAFAF7", "chart_plot": "#F3F1EB",
+    "chart_grid": "#E2DED4", "chart_text": "#4A5568",
+}
+THEME_DARK = {
+    "app_bg": "#0E1117", "panel_bg": "#1A1D24", "sidebar_bg": "#161B22",
+    "border": "#30363D", "text_primary": "#E6EDF3", "text_secondary": "#B1BAC4",
+    "text_muted": "#8B949E", "accent": "#3DBCC9", "accent_hover": "#52D1DE",
+    "positive": "#3FB950", "negative": "#F85149", "warning": "#D29922",
+    "chart_paper": "#0E1117", "chart_plot": "#161B22",
+    "chart_grid": "#30363D", "chart_text": "#B1BAC4",
+}
+T = THEME_DARK if _DARK else THEME_LIGHT
+
+# ── Color palette (risk colors are constant across themes) ───────────
 COLORS = {
-    "primary": "#20808D",       # Muted teal
-    "secondary": "#A84B2F",     # Terra/rust
-    "dark_teal": "#1B474D",
-    "light_cyan": "#BCE2E7",
-    "mauve": "#944454",
-    "gold": "#FFC553",
-    "olive": "#848456",
-    "brown": "#6E522B",
-    "bg": "#FCFAF6",            # Off-white
-    "bg_alt": "#F3F3EE",        # Paper white
-    "text": "#13343B",          # Off-black
-    "text_muted": "#2E565D",
-    "critical": "#DC2626",
-    "high": "#F59E0B",
-    "moderate": "#3B82F6",
-    "low": "#10B981",
+    "primary": "#20808D", "secondary": "#A84B2F", "dark_teal": "#1B474D",
+    "light_cyan": "#BCE2E7", "mauve": "#944454", "gold": "#FFC553",
+    "olive": "#848456", "brown": "#6E522B",
+    "bg": T["chart_paper"], "bg_alt": T["chart_plot"],
+    "text": T["text_primary"], "text_muted": T["text_secondary"],
+    "critical": "#DC2626", "high": "#F59E0B", "moderate": "#3B82F6", "low": "#10B981",
 }
 
 RISK_COLORS = {"Critical": COLORS["critical"], "High": COLORS["high"],
@@ -64,28 +84,92 @@ CHART_SEQUENCE = [COLORS["primary"], COLORS["secondary"], COLORS["dark_teal"],
                   COLORS["mauve"], COLORS["gold"], COLORS["olive"],
                   COLORS["brown"], COLORS["light_cyan"]]
 
+# ── Shared Plotly layout template ────────────────────────────────────
+def _base_layout(**overrides):
+    """Return a Plotly layout dict aligned with the active theme."""
+    base = dict(
+        paper_bgcolor=T["chart_paper"], plot_bgcolor=T["chart_plot"],
+        font=dict(color=T["chart_text"], size=12),
+        xaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        yaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+    )
+    base.update(overrides)
+    return base
+
+# ── Global CSS ───────────────────────────────────────────────────────
+# Uses Streamlit CSS variables (--text-color, --background-color,
+# --secondary-background-color) so both dark and light mode work.
 st.markdown("""
 <style>
 .main .block-container { padding-top: 1.2rem; max-width: 1200px; }
-h1 { color: #13343B; font-weight: 700; }
-h2 { color: #1B474D; font-weight: 600; border-bottom: 2px solid #20808D; padding-bottom: .3rem; }
-h3 { color: #2E565D; font-weight: 600; }
-[data-testid="stMetricValue"] { font-size: 1.7rem; font-weight: 700; color: #13343B; }
-[data-testid="stMetricLabel"] { font-size: .82rem; color: #2E565D; }
-.stTabs [data-baseweb="tab-list"] { gap: 6px; }
-.stTabs [data-baseweb="tab"] { height: 38px; padding: 0 14px; background: #F3F3EE;
-  border-radius: 6px 6px 0 0; font-weight: 500; color: #2E565D; }
+
+/* Typography – inherits from Streamlit theme */
+h1 { color: var(--text-color); font-weight: 700; font-size: 1.55rem; }
+h2 { color: var(--text-color); font-weight: 600; font-size: 1.2rem;
+     border-bottom: 2px solid #20808D; padding-bottom: .3rem; }
+h3 { color: var(--text-color); font-weight: 600; font-size: 1.05rem; }
+
+/* Metrics */
+[data-testid="stMetricValue"] { font-size: 1.5rem; font-weight: 700; color: var(--text-color); }
+[data-testid="stMetricLabel"] { font-size: .82rem; color: var(--text-color); opacity: 0.7; }
+
+/* Tabs – flex-wrap prevents overflow at default viewport */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; flex-wrap: wrap; }
+.stTabs [data-baseweb="tab"] { height: 36px; padding: 0 12px;
+  background: var(--secondary-background-color);
+  border-radius: 6px 6px 0 0; font-weight: 500; font-size: 0.85rem;
+  color: var(--text-color); white-space: nowrap; }
 .stTabs [aria-selected="true"] { background: #20808D !important; color: white !important; }
-.risk-critical { background:#FEF2F2; border-left:4px solid #DC2626; padding:10px; border-radius:4px; margin:6px 0; }
-.risk-high     { background:#FFFBEB; border-left:4px solid #F59E0B; padding:10px; border-radius:4px; margin:6px 0; }
-.risk-moderate { background:#EFF6FF; border-left:4px solid #3B82F6; padding:10px; border-radius:4px; margin:6px 0; }
-.risk-low      { background:#ECFDF5; border-left:4px solid #10B981; padding:10px; border-radius:4px; margin:6px 0; }
-[data-testid="stSidebar"] { background-color: #F3F3EE; }
-.footer { text-align:center; color:#2E565D; font-size:.72rem; padding:18px 0; }
-.kpi-card { background:white; border:1px solid #E5E3D4; border-radius:8px;
-  padding:14px 16px; text-align:center; }
-.kpi-val  { font-size:1.6rem; font-weight:700; color:#13343B; }
-.kpi-lab  { font-size:.78rem; color:#2E565D; margin-top:2px; }
+
+/* Risk alert boxes – rgba backgrounds adapt to both themes */
+.risk-critical { background: rgba(220,38,38,0.09); border-left:4px solid #DC2626;
+  padding:10px; border-radius:4px; margin:6px 0; color: var(--text-color); }
+.risk-high { background: rgba(245,158,11,0.09); border-left:4px solid #F59E0B;
+  padding:10px; border-radius:4px; margin:6px 0; color: var(--text-color); }
+.risk-moderate { background: rgba(59,130,246,0.09); border-left:4px solid #3B82F6;
+  padding:10px; border-radius:4px; margin:6px 0; color: var(--text-color); }
+.risk-low { background: rgba(16,185,129,0.09); border-left:4px solid #10B981;
+  padding:10px; border-radius:4px; margin:6px 0; color: var(--text-color); }
+
+/* Sidebar – inherits theme; text always readable */
+[data-testid="stSidebar"] { background-color: var(--secondary-background-color); }
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] .stMarkdown li,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
+  color: var(--text-color) !important; }
+
+/* Footer */
+.footer { text-align:center; color: var(--text-color); opacity:0.55;
+  font-size:.72rem; padding:18px 0; }
+
+/* KPI cards – responsive row that wraps instead of clipping */
+.kpi-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+.kpi-card { flex: 1 1 140px; min-width: 120px;
+  background: var(--secondary-background-color);
+  border: 1px solid rgba(128,128,128,0.2); border-radius: 6px;
+  padding: 12px 14px; text-align: center; }
+.kpi-val { font-size: 1.45rem; font-weight: 700; color: var(--text-color); }
+.kpi-lab { font-size: .76rem; color: var(--text-color); opacity: 0.65; margin-top: 2px; }
+
+/* Briefing summary box */
+.briefing-box { background: var(--secondary-background-color);
+  border: 1px solid rgba(128,128,128,0.18); border-radius: 6px;
+  padding: 14px 18px; margin: 8px 0 14px 0; color: var(--text-color);
+  font-size: 0.92rem; line-height: 1.55; }
+
+/* Tables – prevent accent color bleed */
+[data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
+  color: var(--text-color) !important; }
+
+/* Subtle insignia */
+.insignia { text-align:center; font-variant:small-caps; color:var(--text-color);
+  opacity:0.35; font-size:0.68rem; margin-top:1.2rem; letter-spacing:0.06em; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -668,13 +752,14 @@ class Scenario:
     regional_harmonization: float = 0.0 # AfCFTA RoO harmonization
 
 
+# Canonical scenario labels: key == Scenario.name for consistency everywhere.
 SCENARIOS = {
-    "Baseline": Scenario("Baseline (Current Trajectory)", 0.0, 0.3, 0.0, 0.0, 0.0),
-    "China Rerouting Shock": Scenario("China Rerouting via West Africa", 0.6, 0.3, 0.0, 0.0, 0.0),
-    "EU Enforcement Tightening": Scenario("EU Tightens EPA RoO Enforcement", 0.0, 0.3, 0.7, 0.2, 0.1),
-    "Digital Traceability Rollout": Scenario("AfCFTA Digital Traceability Protocol", 0.0, 0.5, 0.1, 0.8, 0.4),
-    "Full AfCFTA + Harmonization": Scenario("Full AfCFTA + Harmonized RoO", 0.1, 0.8, 0.2, 0.5, 0.8),
-    "Worst Case: Multi-Shock": Scenario("Worst Case: China Rerouting + Weak Enforcement", 0.8, 0.6, 0.0, 0.0, 0.0),
+    "Baseline": Scenario("Baseline", 0.0, 0.3, 0.0, 0.0, 0.0),
+    "China Rerouting Shock": Scenario("China Rerouting Shock", 0.6, 0.3, 0.0, 0.0, 0.0),
+    "EU Enforcement Tightening": Scenario("EU Enforcement Tightening", 0.0, 0.3, 0.7, 0.2, 0.1),
+    "Digital Traceability Rollout": Scenario("Digital Traceability Rollout", 0.0, 0.5, 0.1, 0.8, 0.4),
+    "Full AfCFTA + Harmonization": Scenario("Full AfCFTA + Harmonization", 0.1, 0.8, 0.2, 0.5, 0.8),
+    "Worst Case: Multi-Shock": Scenario("Worst Case: Multi-Shock", 0.8, 0.6, 0.0, 0.0, 0.0),
 }
 
 
@@ -1038,30 +1123,37 @@ def fig_risk_bars(rdf):
     fig = go.Figure(go.Bar(
         y=d["country"], x=d["overall"], orientation="h",
         marker_color=colors, text=[f"{v:.1f}" for v in d["overall"]],
-        textposition="outside",
+        textposition="outside", textfont=dict(color=T["chart_text"]),
         hovertemplate="<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>"))
-    fig.update_layout(
-        xaxis=dict(title="Risk Score (0-100)", range=[0, 105]),
-        height=max(400, len(d) * 32 + 100), margin=dict(l=120, r=60, t=20, b=30),
-        paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg_alt"], showlegend=False)
+    fig.update_layout(**_base_layout(
+        xaxis=dict(title="Risk Score (0-100)", range=[0, 108],
+                   gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        yaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=max(400, len(d) * 32 + 100),
+        margin=dict(l=140, r=60, t=20, b=30), showlegend=False))
     return fig
 
 
 def fig_heatmap(hdf, title=""):
     if hdf.empty:
         fig = go.Figure()
-        fig.add_annotation(text="No data", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+        fig.add_annotation(text="No data", xref="paper", yref="paper",
+                           x=0.5, y=0.5, showarrow=False, font=dict(color=T["chart_text"]))
+        fig.update_layout(**_base_layout())
         return fig
     fig = go.Figure(go.Heatmap(
         z=hdf.values, x=[c[:28] for c in hdf.columns], y=hdf.index,
         colorscale=[[0, "#E8F5E9"], [.25, "#FFF9C4"], [.5, "#FFE0B2"], [.75, "#FFAB91"], [1, "#EF5350"]],
-        colorbar=dict(title="Score"),
+        colorbar=dict(title="Score", tickfont=dict(color=T["chart_text"]),
+                      titlefont=dict(color=T["chart_text"])),
         hovertemplate="Country: %{y}<br>Category: %{x}<br>Score: %{z:.1f}<extra></extra>"))
-    fig.update_layout(title=dict(text=title, font_size=14),
-                      xaxis=dict(tickangle=45, tickfont_size=9), yaxis_tickfont_size=11,
-                      height=max(400, len(hdf) * 35 + 150),
-                      margin=dict(l=120, r=30, t=50, b=120),
-                      paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg"])
+    fig.update_layout(**_base_layout(
+        title=dict(text=title, font_size=13, font_color=T["chart_text"]),
+        xaxis=dict(tickangle=45, tickfont_size=9, gridcolor=T["chart_grid"],
+                   zerolinecolor=T["chart_grid"]),
+        yaxis=dict(tickfont_size=11, gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=max(400, len(hdf) * 35 + 150),
+        margin=dict(l=140, r=30, t=50, b=130)))
     return fig
 
 
@@ -1080,11 +1172,14 @@ def fig_mc_fan(mc, title=""):
                              fillcolor="rgba(32,128,141,.25)", line_color="rgba(32,128,141,0)", name="50% CI"))
     fig.add_trace(go.Scatter(x=labs, y=m, mode="lines+markers", name="Mean",
                              line=dict(color=COLORS["primary"], width=3), marker_size=8))
-    fig.update_layout(title=dict(text=title, font_size=14),
-                      yaxis=dict(title="Leakage Rate (%)", rangemode="tozero"),
-                      height=380, margin=dict(l=50, r=30, t=50, b=30),
-                      paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg_alt"],
-                      legend=dict(orientation="h", y=1.08, x=1, xanchor="right"))
+    fig.update_layout(**_base_layout(
+        title=dict(text=title, font_size=13, font_color=T["chart_text"]),
+        yaxis=dict(title="Leakage Rate (%)", rangemode="tozero",
+                   gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        xaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=380, margin=dict(l=55, r=30, t=50, b=30),
+        legend=dict(orientation="h", y=1.08, x=1, xanchor="right",
+                    font=dict(color=T["chart_text"]))))
     return fig
 
 
@@ -1098,13 +1193,15 @@ def fig_scenario_bars(sdf, title=""):
                      array=(d["CI High %"] - d["Leakage Mean %"]).tolist(),
                      arrayminus=(d["Leakage Mean %"] - d["CI Low %"]).tolist(), color="#666"),
         text=[f"{v:.1f}%" for v in d["Leakage Mean %"]], textposition="outside",
+        textfont=dict(color=T["chart_text"]),
         hovertemplate="<b>%{y}</b><br>Leakage: %{x:.1f}%<extra></extra>"))
-    fig.update_layout(title=dict(text=title, font_size=14),
-                      xaxis=dict(title="Leakage Rate (%)", rangemode="tozero"),
-                      yaxis_tickfont_size=10,
-                      height=max(350, len(d) * 55 + 80),
-                      margin=dict(l=260, r=70, t=50, b=30),
-                      paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg_alt"], showlegend=False)
+    fig.update_layout(**_base_layout(
+        title=dict(text=title, font_size=13, font_color=T["chart_text"]),
+        xaxis=dict(title="Leakage Rate (%)", rangemode="tozero",
+                   gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        yaxis=dict(tickfont_size=10, gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=max(350, len(d) * 55 + 80),
+        margin=dict(l=260, r=70, t=50, b=30), showlegend=False))
     return fig
 
 
@@ -1116,10 +1213,12 @@ def fig_trade_ts(tdf, cname, partner="EU27"):
                              line=dict(color=COLORS["primary"], width=2.5), mode="lines+markers"))
     fig.add_trace(go.Scatter(x=agg["year"], y=agg["imports"], name="Imports",
                              line=dict(color=COLORS["secondary"], width=2.5, dash="dash"), mode="lines+markers"))
-    fig.update_layout(xaxis=dict(title="Year", dtick=1), yaxis_title="USD",
-                      height=360, margin=dict(l=60, r=30, t=30, b=30),
-                      paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg_alt"],
-                      legend=dict(orientation="h", y=1.08, x=1, xanchor="right"))
+    fig.update_layout(**_base_layout(
+        xaxis=dict(title="Year", dtick=1, gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        yaxis=dict(title="USD", gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=360, margin=dict(l=65, r=30, t=30, b=30),
+        legend=dict(orientation="h", y=1.08, x=1, xanchor="right",
+                    font=dict(color=T["chart_text"]))))
     return fig
 
 
@@ -1131,8 +1230,14 @@ def fig_radar(regdf):
         fig.add_trace(go.Scatterpolar(r=vals, theta=cats + [cats[0]], fill="toself",
                                        name=r["Region"],
                                        line_color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)]))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-                      height=430, margin=dict(l=70, r=70, t=30, b=30), paper_bgcolor=COLORS["bg"])
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100],
+                                   gridcolor=T["chart_grid"]),
+                   angularaxis=dict(gridcolor=T["chart_grid"])),
+        height=430, margin=dict(l=70, r=70, t=30, b=30),
+        paper_bgcolor=T["chart_paper"],
+        font=dict(color=T["chart_text"]),
+        legend=dict(font=dict(color=T["chart_text"])))
     return fig
 
 
@@ -1142,12 +1247,13 @@ def fig_radar(regdf):
 
 def render_sidebar():
     with st.sidebar:
-        st.title("EU-Africa Trade Circumvention Simulator")
-        st.caption("Updated")
+        st.markdown("### EU-Africa Trade Circumvention Simulator")
+        st.caption("Data model v2.1 · Sources calibrated to 2023-24")
         st.markdown("---")
 
-        st.subheader("Country Selection")
-        mode = st.radio("Select by:", ["Individual", "EPA Group", "Region", "All 20"], key="sel_mode")
+        st.markdown("**Country Selection**")
+        mode = st.radio("Selection mode", ["Individual", "EPA Group", "Region", "All 20"],
+                        key="sel_mode", label_visibility="collapsed")
         all_names = sorted(COUNTRIES.keys())
         if mode == "Individual":
             sel = st.multiselect("Countries:", all_names,
@@ -1157,27 +1263,29 @@ def render_sidebar():
         elif mode == "EPA Group":
             g = st.selectbox("EPA group:", list(EPA_GROUPS.keys()), key="epa_g")
             sel = EPA_GROUPS[g]
-            st.info(f"Countries: {', '.join(sel)}")
+            st.caption(f"Countries: {', '.join(sel)}")
         elif mode == "Region":
             r = st.selectbox("Region:", list(REGION_CLUSTERS.keys()), key="reg_r")
             sel = REGION_CLUSTERS[r]
-            st.info(f"Countries: {', '.join(sel)}")
+            st.caption(f"Countries: {', '.join(sel)}")
         else:
             sel = all_names
 
         st.markdown("---")
-        st.subheader("Detection Parameters")
+        st.markdown("**Detection Parameters**")
         z_th = st.slider("Export spike Z-threshold", 1.0, 4.0, 2.0, 0.25,
-                         help="Std deviations above mean to flag")
+                         help="Standard deviations above expanding mean to flag as anomalous")
         cap_th = st.slider("Capacity mismatch threshold", 1.0, 3.0, 1.5, 0.1,
-                           help="Export / production-capacity ratio")
-        n_sim = st.select_slider("Monte Carlo iterations",
-                                 [1000, 2000, 3000, 5000, 10000], 3000,
-                                 help="More = precise but slower")
+                           help="Export-to-production-capacity ratio above which to flag")
+        mc_options = [1000, 2000, 3000, 5000, 10000]
+        mc_labels = ["1K", "2K", "3K", "5K", "10K"]
+        n_sim = st.select_slider("Monte Carlo iterations", options=mc_options,
+                                 value=3000, format_func=lambda x: mc_labels[mc_options.index(x)],
+                                 help="Number of simulation runs (more = precise but slower)")
 
         st.markdown("---")
-        st.subheader("Scenario")
-        sc_name = st.selectbox("Select scenario:", list(SCENARIOS.keys()), key="sc_sel")
+        st.markdown("**Scenario**")
+        sc_name = st.selectbox("Active scenario:", list(SCENARIOS.keys()), key="sc_sel")
         sc = SCENARIOS[sc_name]
         with st.expander("Scenario parameters"):
             st.write(f"Rerouting pressure: {sc.rerouting_pressure:.1f}")
@@ -1187,23 +1295,31 @@ def render_sidebar():
             st.write(f"Regional harmonization: {sc.regional_harmonization:.1f}")
 
         st.markdown("---")
-        with st.expander("About"):
+        with st.expander("About this tool"):
             st.markdown("""
-**Rules-of-Origin Circumvention Simulator**
+**EU-Africa Trade Circumvention Simulator**
 
-Models the overlap between EU EPAs and AfCFTA liberalization as a strategic
-arbitrage game, identifying circumvention risks across 20 African countries.
+A policy intelligence prototype that models the overlap between EU Economic
+Partnership Agreements (EPAs) and AfCFTA liberalization as a strategic
+arbitrage game, estimating circumvention risks across 20 African countries.
 
 **Methods:** Z-score anomaly detection, capacity-mismatch analysis, origin-shift
 correlation, Monte Carlo behavioral simulation (firm + state agents).
 
-**Data:** Modeled trade flows calibrated to UN Comtrade patterns, WGI governance
-indicators, EU Access2Markets tariff schedules, EPPO/OLAF enforcement stats.
+**Data:** Synthetic trade flows calibrated to UN Comtrade patterns, WGI governance
+indicators, EU Access2Markets tariff schedules, EPPO/OLAF enforcement statistics.
+
+This is a decision-support simulator, not an enforcement system. All outputs
+are indicative assessments intended for analytical capacity-building.
             """)
         with st.expander("Disclaimer"):
-            st.warning("Simulation-based modeling with data calibrated to public "
-                       "sources. Results are indicative risk assessments for capacity-building, "
-                       "not precise predictions. Framed as neutral diagnostics.")
+            st.caption("Simulation-based modeling with data calibrated to public "
+                       "sources. Results are indicative risk assessments for analytical "
+                       "and capacity-building purposes, not precise predictions or "
+                       "enforcement determinations.")
+
+        st.markdown('<div class="insignia">Decision-Support Prototype</div>',
+                    unsafe_allow_html=True)
 
         return sel, z_th, cap_th, n_sim, sc_name
 
@@ -1566,31 +1682,34 @@ TOP RISKS:
 def main():
     sel, z_th, cap_th, n_sim, sc_name = render_sidebar()
     if not sel:
-        st.warning("Select at least one country from the sidebar.")
+        st.info("Select at least one country from the sidebar to begin analysis.")
         return
 
-    with st.spinner("Running analysis pipeline..."):
+    with st.spinner("Running analysis pipeline — this may take a moment for large selections."):
         tdf, gov_df, adf, mc, rdf = load_all(tuple(sorted(sel)), z_th, cap_th, n_sim, sc_name)
 
-    st.title("EU-Africa Trade Circumvention Simulator")
+    # Single page title — rendered once only
+    st.markdown("## EU-Africa Trade Circumvention Simulator")
     sc = SCENARIOS[sc_name]
-    st.markdown(f"**Scenario**: {sc.name} | **Countries**: {len(sel)} | **MC Iterations**: {n_sim:,}")
+    st.caption(f"Scenario: {sc_name}  ·  Countries: {len(sel)}  ·  MC iterations: {n_sim:,}")
 
+    # Shortened tab labels to prevent overflow at default viewport
     t1, t2, t3, t4, t5, t6 = st.tabs([
-        "Overview", "Country Deep-Dive", "Comparative",
-        "Simulation Lab", "Policy Menu", "Data Explorer"])
+        "Overview", "Country", "Compare",
+        "Simulate", "Policy", "Data"])
 
     with t1: tab_overview(rdf, adf, mc, sel, sc_name)
     with t2: tab_country(rdf, adf, tdf, mc, gov_df, sel, sc_name, n_sim)
     with t3: tab_compare(rdf, adf, sel)
     with t4: tab_simulate(sel, mc, n_sim)
-    with t5: tab_policy(rdf, adf, mc, sel, sc_name)
+    with t5: tab_policy(rdf, adf, mc, sel, sc_name, gov_df)
     with t6: tab_data(tdf, adf, rdf, mc, sc_name)
 
     st.markdown("---")
-    st.markdown('<div class="footer">EU-Africa Trade Circumvention Simulator | Open-Source Simulation Tool | '
-                'Data: UN Comtrade, World Bank WGI, EU Access2Markets, AfCFTA e-Tariff Book | '
-                'MC calibration: EPPO/OLAF enforcement statistics</div>', unsafe_allow_html=True)
+    st.markdown('<div class="footer">EU-Africa Trade Circumvention Simulator · '
+                'Policy Intelligence Prototype · '
+                'Data calibrated to: UN Comtrade, World Bank WGI, EU Access2Markets, '
+                'AfCFTA e-Tariff Book, EPPO/OLAF</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
