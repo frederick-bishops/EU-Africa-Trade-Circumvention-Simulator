@@ -63,7 +63,7 @@ THEME_LIGHT = {
     "text_muted": "#718096", "accent": "#20808D", "accent_hover": "#1B6B76",
     "positive": "#10B981", "negative": "#DC2626", "warning": "#D97706",
     "chart_paper": "#FAFAF7", "chart_plot": "#F3F1EB",
-    "chart_grid": "#E2DED4", "chart_text": "#4A5568",
+    "chart_grid": "#E2DED4", "chart_text": "#2D3748",
 }
 THEME_DARK = {
     "app_bg": "#0E1117", "panel_bg": "#1A1D24", "sidebar_bg": "#161B22",
@@ -71,7 +71,7 @@ THEME_DARK = {
     "text_muted": "#8B949E", "accent": "#3DBCC9", "accent_hover": "#52D1DE",
     "positive": "#3FB950", "negative": "#F85149", "warning": "#D29922",
     "chart_paper": "#0E1117", "chart_plot": "#161B22",
-    "chart_grid": "#30363D", "chart_text": "#B1BAC4",
+    "chart_grid": "#30363D", "chart_text": "#D1D9E0",
 }
 T = THEME_DARK if _DARK else THEME_LIGHT
 
@@ -95,11 +95,14 @@ CHART_SEQUENCE = [COLORS["primary"], COLORS["secondary"], COLORS["dark_teal"],
 # ── Shared Plotly layout template ────────────────────────────────────
 def _base_layout(**overrides):
     """Return a Plotly layout dict aligned with the active theme."""
+    _axis_font = dict(color=T["chart_text"])
     base = dict(
         paper_bgcolor=T["chart_paper"], plot_bgcolor=T["chart_plot"],
         font=dict(color=T["chart_text"], size=12),
-        xaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
-        yaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        xaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"],
+                   tickfont=_axis_font, titlefont=_axis_font),
+        yaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"],
+                   tickfont=_axis_font, titlefont=_axis_font),
     )
     base.update(overrides)
     return base
@@ -1713,8 +1716,10 @@ def fig_radar(regdf):
                                        line_color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)]))
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 100],
-                                   gridcolor=T["chart_grid"]),
-                   angularaxis=dict(gridcolor=T["chart_grid"])),
+                                   gridcolor=T["chart_grid"],
+                                   tickfont=dict(color=T["chart_text"])),
+                   angularaxis=dict(gridcolor=T["chart_grid"],
+                                    tickfont=dict(color=T["chart_text"]))),
         height=430, margin=dict(l=70, r=70, t=30, b=30),
         paper_bgcolor=T["chart_paper"],
         font=dict(color=T["chart_text"]),
