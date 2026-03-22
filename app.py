@@ -1,18 +1,26 @@
 """
-International Trade Circumvention Simulator
-==============================================
-Modular Multi-Country Rules-of-Origin Circumvention Simulator
-with Behavioral Forecasting.
+EU-Africa Trade Circumvention Simulator
+========================================
+Policy intelligence prototype and decision-support simulator for
+preferential trade integrity analysis.
 
-Single-file Streamlit application. All data is embedded; no external APIs required.
+Models Rules-of-Origin circumvention risks across 20 African EPA-
+implementing countries using anomaly detection and Monte Carlo
+behavioral simulation.
 
-Data sources (cited inline):
+Single-file Streamlit application. All data is embedded (synthetic,
+calibrated to public sources); no external APIs required.
+
+Data calibration sources (cited inline):
 - UN Comtrade (trade flow patterns, 2016-2025)
 - World Bank WGI (governance indicators, 2024 update)
 - EU Access2Markets (EPA tariff schedules / RoO protocols)
 - AfCFTA e-Tariff Book (concession schedules)
 - EPPO / OLAF (EU customs enforcement statistics)
 - World Bank Development Indicators (GDP, manufacturing share)
+
+All outputs are indicative assessments for analytical and capacity-
+building purposes, not enforcement determinations.
 """
 
 import streamlit as st
@@ -1875,7 +1883,8 @@ def tab_overview(rdf, adf, mc, sel, sc_name):
                 f'<div class="{cls}"><strong>{row["country"]}</strong> -- '
                 f'Score: {row["overall"]:.1f} ({row["rating"]})<br>'
                 f'<small>Structural: {row["structural"]:.0f} | Anomaly: {row["anomaly"]:.0f} | '
-                f'MC Leak: {row["mc_leak"]:.0f} | Gov Gap: {row["governance"]:.0f}</small></div>',
+                f'<abbr title="{GLOSSARY["MC Leak"]}">MC Leak</abbr>: {row["mc_leak"]:.0f} | '
+                f'<abbr title="{GLOSSARY["Gov Gap"]}">Gov Gap</abbr>: {row["governance"]:.0f}</small></div>',
                 unsafe_allow_html=True)
 
     st.markdown("---")
@@ -1907,11 +1916,13 @@ def tab_country(rdf, adf, tdf, mc, gov_df, sel, sc_name, n_sim):
         st.metric("Overall Score", f"{cr['overall']:.1f}/100")
 
     cols = st.columns(4)
-    for col, (lab, val) in zip(cols, [
-        ("Structural", cr["structural"]), ("Anomaly", cr["anomaly"]),
-        ("MC Leakage", cr["mc_leak"]), ("Governance Gap", cr["governance"])
+    for col, (lab, val, hlp) in zip(cols, [
+        ("Structural", cr["structural"], "Composite of port exposure, governance gap, customs weakness, EPA value, manufacturing cover, and HS exposure"),
+        ("Anomaly", cr["anomaly"], "Weighted composite from spike detection, capacity mismatch, origin shift correlation, and import/export ratio analysis"),
+        ("MC Leakage", cr["mc_leak"], GLOSSARY["MC Leak"]),
+        ("Gov Gap", cr["governance"], GLOSSARY["Gov Gap"]),
     ]):
-        col.metric(lab, f"{val:.1f}")
+        col.metric(lab, f"{val:.1f}", help=hlp)
 
     st.markdown("---")
     c1, c2 = st.columns(2)
@@ -1991,7 +2002,10 @@ def tab_compare(rdf, adf, sel):
     st.caption("Countries with correlated anomaly patterns suggesting coordinated or cascading circumvention.")
     spdf = spillover_corridors(adf, sel)
     if len(spdf) > 0:
-        st.dataframe(spdf.head(20), use_container_width=True, hide_index=True)
+        spdf_disp = spdf.head(20).copy()
+        if "Same Region" in spdf_disp.columns:
+            spdf_disp["Same Region"] = spdf_disp["Same Region"].map({True: "Yes", False: "No"})
+        st.dataframe(spdf_disp, use_container_width=True, hide_index=True)
     else:
         st.info("No significant spillover corridors detected.")
 
