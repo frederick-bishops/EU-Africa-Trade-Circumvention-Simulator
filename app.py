@@ -1804,7 +1804,7 @@ are indicative assessments intended for analytical capacity-building.
                        "and capacity-building purposes, not precise predictions or "
                        "enforcement determinations.")
 
-        st.markdown('<div class="insignia">Decision-Support Prototype</div>',
+        st.markdown('<div class="insignia">Designing Decisions Systems</div>',
                     unsafe_allow_html=True)
 
         return sel, z_th, cap_th, n_sim, sc_name
