@@ -1828,6 +1828,29 @@ def tab_overview(rdf, adf, mc, sel, sc_name):
     ) + '</div>'
     st.markdown(kpi_html, unsafe_allow_html=True)
 
+    # Analytical summary
+    if len(rdf) > 0:
+        top = rdf.iloc[0]
+        driver_means = {"structural": rdf["structural"].mean(),
+                        "anomaly": rdf["anomaly"].mean(),
+                        "mc_leak": rdf["mc_leak"].mean(),
+                        "governance": rdf["governance"].mean()}
+        strongest = max(driver_means, key=driver_means.get)
+        # Find which country is most scenario-sensitive (highest MC spread)
+        mc_spreads = {}
+        for c, mr in mc.items():
+            ci = mr.get("final_leak_ci90", (0, 0))
+            mc_spreads[c] = (ci[1] - ci[0]) * 100
+        most_sensitive = max(mc_spreads, key=mc_spreads.get) if mc_spreads else top["country"]
+        st.markdown(
+            f'<div class="briefing-box">'
+            f'<strong>Dominant risk:</strong> {top["country"]} ({top["overall"]:.1f}, {top["rating"]}). '
+            f'<strong>Strongest driver:</strong> {strongest.replace("_", " ")} '
+            f'(portfolio avg {driver_means[strongest]:.0f}). '
+            f'<strong>Most scenario-sensitive:</strong> {most_sensitive} '
+            f'(CI spread {mc_spreads.get(most_sensitive, 0):.1f}pp).'
+            f'</div>', unsafe_allow_html=True)
+
     st.markdown("---")
     c1, c2 = st.columns([3, 2])
     with c1:
@@ -2053,33 +2076,156 @@ def tab_simulate(sel, mc, n_sim):
 
 # ─── Tab: Policy ──────────────────────────────────────────────────────────
 
-def tab_policy(rdf, adf, mc, sel, sc_name):
-    st.subheader("Policy Recommendations")
+def tab_policy(rdf, adf, mc, sel, sc_name, gov_df=None):
+    # ── 1. Situation Summary ─────────────────────────────────────────
+    st.subheader("Policy Intelligence")
     sh = st.selectbox("Briefing for:", ["AfCFTA Secretariat", "EU DG Trade"], key="sh_sel")
     st.markdown(stakeholder_summary(rdf, sh))
 
+    # Top-level analytical summary
+    nc = len(rdf[rdf["rating"] == "Critical"])
+    nh = len(rdf[rdf["rating"] == "High"])
+    if len(rdf) > 0:
+        top = rdf.iloc[0]
+        avg_leak = np.mean([r.get("final_leak_mean", 0) for r in mc.values()]) * 100
+        # Identify strongest driver across the portfolio
+        driver_means = {"structural": rdf["structural"].mean(),
+                        "anomaly": rdf["anomaly"].mean(),
+                        "mc_leak": rdf["mc_leak"].mean(),
+                        "governance": rdf["governance"].mean()}
+        strongest = max(driver_means, key=driver_means.get)
+        st.markdown(
+            f'<div class="briefing-box">'
+            f'<strong>Situation summary.</strong> '
+            f'{nc + nh} of {len(rdf)} countries show Critical or High risk under the '
+            f'{sc_name} scenario. The dominant portfolio-level driver is '
+            f'{strongest.replace("_", " ")} (avg {driver_means[strongest]:.0f}/100). '
+            f'Mean simulated leakage across selected countries: {avg_leak:.1f}%. '
+            f'Highest single-country risk: {top["country"]} ({top["overall"]:.1f}, {top["rating"]}).'
+            f'</div>', unsafe_allow_html=True)
+
+    # ── 2. Country Recommendation & Reasoning ────────────────────────
     st.markdown("---")
-    st.subheader("Country Policy Menu")
+    st.subheader("Country Recommendation & Reasoning")
     pc = st.selectbox("Country:", sel, key="pol_c")
     cr = rdf[rdf["country"] == pc]
-    if len(cr) > 0:
-        recs = policy_recommendations(pc, cr.iloc[0].to_dict(), adf)
-        for pri in (1, 2, 3):
-            pr = [r for r in recs if r["Priority"] == pri]
-            if pr:
-                labels = {1: "Priority 1: Urgent", 2: "Priority 2: Structural", 3: "Priority 3: Medium-Term"}
-                st.markdown(f"#### {labels[pri]}")
-                for r in pr:
-                    with st.expander(f"{r['Category']}: {r['Recommendation'][:80]}..."):
-                        st.markdown(f"**Recommendation**: {r['Recommendation']}")
-                        st.markdown(f"**Stakeholder**: {r['Stakeholder']}")
-                        st.markdown(f"**Impact**: {r['Impact']}")
+    if len(cr) == 0:
+        st.info("No data for selected country.")
+        return
+    cr_dict = cr.iloc[0].to_dict()
+    mc_res = mc.get(pc, {})
 
-        rec_df = pd.DataFrame(recs)
-        csv = rec_df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Recommendations (CSV)", csv,
-                           f"policy_{pc.lower().replace(' ', '_')}.csv", "text/csv")
+    # Generate recommendation from rules engine
+    rec = recommendation_rules_engine(pc, cr_dict, mc_res, adf)
+    trace = recommendation_trace(pc, cr_dict, mc_res, adf, rec)
+    flip = counterfactual_flip(cr_dict, rec)
+    comparison = intervention_comparison(rec, cr_dict)
 
+    # Recommendation summary box
+    priority_colors = {"urgent": "#DC2626", "elevated": "#F59E0B",
+                       "standard": "#3B82F6", "routine": "#10B981"}
+    pri_color = priority_colors.get(rec["intervention_priority"], "#666")
+    st.markdown(
+        f'<div class="briefing-box">'
+        f'<strong>Recommendation: {rec["recommendation_category"]}</strong> '
+        f'<span style="background:{pri_color};color:white;padding:2px 8px;'
+        f'border-radius:3px;font-size:0.8rem;margin-left:8px;">'
+        f'{rec["intervention_priority"].upper()}</span> '
+        f'<span style="opacity:0.7;font-size:0.82rem;margin-left:8px;">'
+        f'Confidence: {rec["confidence_qualifier"]}</span><br><br>'
+        f'{rec["recommendation_rationale"]}'
+        f'</div>', unsafe_allow_html=True)
+
+    # ── Reasoning trace ──────────────────────────────────────────────
+    with st.expander("Reasoning trace — why this recommendation"):
+        st.markdown(f"**Overall risk tier:** {trace['overall_risk_tier']}")
+        st.markdown(f"**Rules triggered:** {', '.join(trace['triggered_rules'])}")
+        st.markdown(f"**Confidence band:** {trace['confidence_band']}")
+        st.markdown("**Dominant structural drivers:** " +
+                    ", ".join(trace["dominant_structural_drivers"]))
+        st.markdown("**Anomaly signals:** " +
+                    "; ".join(trace["dominant_anomaly_drivers"]))
+        st.markdown("**Simulation drivers:** " +
+                    "; ".join(trace["dominant_simulation_drivers"]))
+        st.markdown(f"**Governance position:** {trace['dominant_governance_driver']}")
+
+    # ── Counterfactual flip ──────────────────────────────────────────
+    with st.expander("Counterfactual — what would change this recommendation"):
+        st.markdown(f"**Robustness:** {flip['robustness'].title()} "
+                    f"(margin: {flip['margin_points']} pts)")
+        st.markdown(f"**Most decisive factor:** "
+                    f"{flip['most_decisive_factor'].replace('_', ' ')}")
+        st.markdown(f"**To downgrade:** {flip['downgrade_condition']}")
+        st.markdown(f"**To escalate:** {flip['escalation_condition']}")
+        st.markdown(f"_{flip['explanation']}_")
+
+    # ── Intervention comparison ──────────────────────────────────────
+    with st.expander("Intervention comparison — primary vs. secondary"):
+        c1, c2 = st.columns(2)
+        for col, label, attrs in [(c1, "Primary", comparison["primary"]),
+                                   (c2, "Secondary", comparison["secondary"])]:
+            with col:
+                st.markdown(f"**{label}: {attrs['label']}**")
+                st.caption(attrs["description"])
+                st.markdown(f"- Risk reduction: {attrs['expected_risk_reduction']}")
+                st.markdown(f"- Difficulty: {attrs['implementation_difficulty']}")
+                st.markdown(f"- Speed: {attrs['deployment_speed']}")
+                st.markdown(f"- False-positive exposure: {attrs['false_positive_exposure']}")
+        st.markdown(f"**Why primary is preferred:** {comparison['why_primary_preferred']}")
+        st.markdown(f"**When not to use primary:** {comparison['when_not_to_use_primary']}")
+
+    # ── Monitoring thresholds ────────────────────────────────────────
+    st.caption(f"Escalation: {rec['escalation_threshold_note']}")
+    st.caption(f"Monitoring: {rec['monitoring_threshold_note']}")
+
+    # ── 3. Detailed Policy Menu (existing recommendations) ───────────
+    st.markdown("---")
+    st.subheader("Detailed Policy Menu")
+    recs = policy_recommendations(pc, cr_dict, adf)
+    for pri in (1, 2, 3):
+        pr = [r for r in recs if r["Priority"] == pri]
+        if pr:
+            labels = {1: "Priority 1: Urgent", 2: "Priority 2: Structural",
+                      3: "Priority 3: Medium-Term"}
+            st.markdown(f"#### {labels[pri]}")
+            for r in pr:
+                header = f"{r['Category']}: {r['Recommendation'][:90]}"
+                if len(r['Recommendation']) > 90:
+                    header += "…"
+                with st.expander(header):
+                    st.markdown(f"**Recommendation**: {r['Recommendation']}")
+                    st.markdown(f"**Stakeholder**: {r['Stakeholder']}")
+                    st.markdown(f"**Expected impact**: {r['Impact']}")
+
+    rec_df = pd.DataFrame(recs)
+    csv = rec_df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Recommendations (CSV)", csv,
+                       f"policy_{pc.lower().replace(' ', '_')}.csv", "text/csv")
+
+    # ── 4. Scenario Causal Interpretation ────────────────────────────
+    st.markdown("---")
+    st.subheader("Scenario Causal Pathways")
+    st.caption("How each policy lever affects the model, derived from the scenario engine.")
+    sc = SCENARIOS[sc_name]
+    active_levers = []
+    for attr, cmap in SCENARIO_CAUSAL_MAP.items():
+        val = getattr(sc, attr, 0.0)
+        if val > 0.05:
+            active_levers.append((attr, val, cmap))
+    if active_levers:
+        for attr, val, cmap in active_levers:
+            with st.expander(f"{cmap['label']} ({val:.1f})"):
+                st.markdown(f"**Policy lever:** {cmap['policy_lever']}")
+                st.markdown(f"**Transmission:** {cmap['transmission']}")
+                st.markdown(f"**Interpretation:** {cmap['policy_interpretation']}")
+                st.markdown("**Affects:**")
+                for comp, direction, strength in cmap["affects"]:
+                    st.markdown(f"- {comp.replace('_', ' ').title()}: "
+                                f"{direction} ({strength})")
+    else:
+        st.caption("Baseline scenario — no active policy levers beyond current trajectory.")
+
+    # ── 5. Regional Brief ────────────────────────────────────────────
     st.markdown("---")
     st.subheader("Regional Brief")
     reg = st.selectbox("Region:", list(REGION_CLUSTERS.keys()), key="pol_reg")
@@ -2089,9 +2235,9 @@ def tab_policy(rdf, adf, mc, sel, sc_name):
         avg = reg_data["overall"].mean()
         hi = reg_data.loc[reg_data["overall"].idxmax()]
         lo = reg_data.loc[reg_data["overall"].idxmin()]
-        st.markdown(f"""### {reg} -- Risk Assessment
-**Avg risk**: {avg:.1f}/100 | **Highest**: {hi['country']} ({hi['overall']:.1f}) | **Lowest**: {lo['country']} ({lo['overall']:.1f})
-""")
+        st.markdown(f"**Avg risk**: {avg:.1f}/100 | "
+                    f"**Highest**: {hi['country']} ({hi['overall']:.1f}) | "
+                    f"**Lowest**: {lo['country']} ({lo['overall']:.1f})")
         for _, r in reg_data.iterrows():
             st.markdown(f"- **{r['country']}**: {r['rating']} ({r['overall']:.1f})")
 
