@@ -940,7 +940,459 @@ def all_risk_scores(names, anomaly_df, mc_results, gov_df):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SECTION 8: COMPARATIVE & POLICY ANALYSIS
+# SECTION 8: RECOMMENDATION RULES ENGINE & REASONING LAYER
+# ═══════════════════════════════════════════════════════════════════════
+# Explicit, inspectable rules that map existing model outputs into
+# recommendation classes with traces and counterfactuals.
+
+# ── Intervention catalog ─────────────────────────────────────────────
+INTERVENTIONS = {
+    "targeted_customs_audit": {
+        "label": "Targeted Customs Audit",
+        "desc": "Risk-profiled inspections at ports of export, focused on flagged HS categories",
+        "base_risk_reduction": 0.22, "difficulty": "moderate", "speed": "weeks",
+        "confidence_note": "High where anomaly evidence is strong",
+        "false_positive_risk": "moderate",
+    },
+    "origin_documentation_review": {
+        "label": "Origin Documentation Review",
+        "desc": "Systematic verification of EUR.1 / REX certificates against production evidence",
+        "base_risk_reduction": 0.15, "difficulty": "low", "speed": "weeks",
+        "confidence_note": "Reliable for documentation-based circumvention",
+        "false_positive_risk": "low",
+    },
+    "supplier_verification_escalation": {
+        "label": "Supplier Verification Escalation",
+        "desc": "End-to-end supply chain audit of flagged exporters and their input sources",
+        "base_risk_reduction": 0.28, "difficulty": "high", "speed": "months",
+        "confidence_note": "High precision but resource-intensive",
+        "false_positive_risk": "low",
+    },
+    "watchlist_monitoring": {
+        "label": "Watchlist Monitoring",
+        "desc": "Ongoing statistical monitoring of trade patterns for escalation triggers",
+        "base_risk_reduction": 0.08, "difficulty": "low", "speed": "immediate",
+        "confidence_note": "Low false-positive risk; limited direct impact",
+        "false_positive_risk": "very low",
+    },
+    "regional_coordination_request": {
+        "label": "Regional Coordination Request",
+        "desc": "Cross-border intelligence sharing with neighboring customs authorities",
+        "base_risk_reduction": 0.18, "difficulty": "high", "speed": "months",
+        "confidence_note": "Effective for spillover and rerouting patterns",
+        "false_positive_risk": "low",
+    },
+    "digital_traceability_pilot": {
+        "label": "Digital Traceability Pilot",
+        "desc": "Electronic origin verification linked to AfCFTA Digital Trade Protocol",
+        "base_risk_reduction": 0.25, "difficulty": "high", "speed": "quarters",
+        "confidence_note": "High systemic impact but long deployment horizon",
+        "false_positive_risk": "very low",
+    },
+}
+
+# ── Scenario causal mapping ──────────────────────────────────────────
+SCENARIO_CAUSAL_MAP = {
+    "rerouting_pressure": {
+        "label": "External Rerouting Pressure",
+        "policy_lever": "Trade diversion from supply-chain disruptions",
+        "affects": [
+            ("circumvention_probability", "increase", "strong"),
+            ("detection_difficulty", "increase", "moderate"),
+        ],
+        "transmission": "Supply-chain shifts increase rerouting through EPA countries, "
+                        "raising circumvention incentives while straining detection capacity.",
+        "policy_interpretation": "Represents external shocks (e.g. tariff escalation, "
+                                 "supply-chain restructuring) pushing trade through preferential corridors.",
+    },
+    "afcfta_liberalization": {
+        "label": "AfCFTA Trade Liberalization",
+        "policy_lever": "Intra-African market opening",
+        "affects": [
+            ("trade_volume", "increase", "strong"),
+            ("origin_complexity", "increase", "moderate"),
+            ("circumvention_opportunity", "increase", "moderate"),
+        ],
+        "transmission": "Increased intra-African trade creates additional origin pathways, "
+                        "potentially enabling origin-shopping and complicating cumulation verification.",
+        "policy_interpretation": "Models the trade creation and diversion effects of AfCFTA implementation.",
+    },
+    "epa_tightening": {
+        "label": "EU EPA Enforcement Tightening",
+        "policy_lever": "Stricter Rules of Origin enforcement by EU",
+        "affects": [
+            ("expected_penalty", "increase", "strong"),
+            ("rerouting_incentive", "decrease", "moderate"),
+            ("detection_probability", "increase", "strong"),
+            ("concealment_behavior", "possible shift", "moderate"),
+        ],
+        "transmission": "Higher enforcement raises the expected cost of circumvention, "
+                        "reducing the net incentive. May shift behavior toward harder-to-detect methods.",
+        "policy_interpretation": "Represents tighter REX verification, post-clearance audits, "
+                                 "and cross-referencing of origin declarations.",
+    },
+    "digital_traceability": {
+        "label": "Digital Traceability Rollout",
+        "policy_lever": "Electronic origin verification systems",
+        "affects": [
+            ("documentation_reliability", "increase", "strong"),
+            ("undetected_circumvention", "decrease", "strong"),
+            ("detection_effectiveness", "increase", "strong"),
+            ("anomaly_persistence", "decrease", "moderate"),
+        ],
+        "transmission": "Digital origin certificates and blockchain-based tracking improve "
+                        "documentation integrity and reduce false-documentation circumvention.",
+        "policy_interpretation": "Models deployment of AfCFTA Digital Trade Protocol and "
+                                 "integration with EU REX system.",
+    },
+    "regional_harmonization": {
+        "label": "Regional RoO Harmonization",
+        "policy_lever": "AfCFTA harmonization of Rules of Origin across EPA groups",
+        "affects": [
+            ("origin_shopping_incentive", "decrease", "strong"),
+            ("cumulation_complexity", "decrease", "moderate"),
+            ("compliance_cost", "decrease", "moderate"),
+        ],
+        "transmission": "Harmonized rules reduce the incentive to exploit gaps between EPA-specific "
+                        "and AfCFTA general rules, narrowing structural arbitrage.",
+        "policy_interpretation": "Models convergence of regional RoO regimes, reducing the "
+                                 "policy fragmentation that enables circumvention.",
+    },
+}
+
+
+def recommendation_rules_engine(cname, risk_row, mc_res, anomaly_df):
+    """Generate a formal recommendation from explicit, inspectable rules.
+
+    Rules are checked in priority order. Each rule is named, its conditions
+    are stated, and the output is a structured recommendation object.
+    """
+    structural = risk_row.get("structural", 50)
+    anomaly = risk_row.get("anomaly", 25)
+    mc_leak = risk_row.get("mc_leak", 25)
+    governance = risk_row.get("governance", 50)
+    overall = risk_row.get("overall", 40)
+    rating = risk_row.get("rating", "Moderate")
+    sv = risk_row.get("sv_detail", {})
+
+    # Pillar spread (for confidence assessment)
+    pillars = {"structural": structural, "anomaly": anomaly,
+               "mc_leak": mc_leak, "governance": governance}
+    spread = max(pillars.values()) - min(pillars.values())
+    dominant_pillar = max(pillars, key=pillars.get)
+
+    rules_triggered = []
+
+    # Rule 1: Triple-high → Targeted Enforcement Escalation
+    if anomaly >= 55 and structural >= 50 and mc_leak >= 45:
+        category = "Targeted Enforcement Escalation"
+        primary_key = "targeted_customs_audit"
+        secondary_key = "supplier_verification_escalation"
+        priority = "urgent"
+        confidence = "high" if spread < 35 else "moderate"
+        rules_triggered.append("R1: High anomaly (≥55) + high structural (≥50) + elevated MC leakage (≥45)")
+
+    # Rule 2: High structural but weak anomaly → Enhanced Monitoring
+    elif structural >= 50 and anomaly < 45:
+        category = "Enhanced Monitoring & Evidence Development"
+        primary_key = "watchlist_monitoring"
+        secondary_key = "origin_documentation_review"
+        priority = "standard"
+        confidence = "moderate"
+        rules_triggered.append("R2: High structural vulnerability (≥50) but limited anomaly evidence (<45)")
+
+    # Rule 3: High MC leakage + moderate signals → Contingency Planning
+    elif mc_leak >= 50 and overall >= 45:
+        category = "Contingency Planning"
+        primary_key = "regional_coordination_request"
+        secondary_key = "digital_traceability_pilot"
+        priority = "elevated"
+        confidence = "moderate"
+        rules_triggered.append("R3: Elevated simulation risk (MC ≥50) with moderate composite (≥45)")
+
+    # Rule 4: High composite but no single dominant pillar → Verification
+    elif overall >= 50 and spread < 25:
+        category = "Broad Verification"
+        primary_key = "origin_documentation_review"
+        secondary_key = "targeted_customs_audit"
+        priority = "elevated"
+        confidence = "low"
+        rules_triggered.append("R4: Elevated composite (≥50) but diffuse signal (spread <25)")
+
+    # Rule 5: High governance gap → Institutional Capacity Building
+    elif governance >= 60 and structural >= 40:
+        category = "Institutional Capacity Building"
+        primary_key = "digital_traceability_pilot"
+        secondary_key = "watchlist_monitoring"
+        priority = "standard"
+        confidence = "moderate"
+        rules_triggered.append("R5: High governance gap (≥60) with structural exposure (≥40)")
+
+    # Rule 6: Moderate overall risk
+    elif overall >= 30:
+        category = "Standard Surveillance"
+        primary_key = "watchlist_monitoring"
+        secondary_key = "origin_documentation_review"
+        priority = "routine"
+        confidence = "moderate"
+        rules_triggered.append("R6: Moderate composite risk (30-50)")
+
+    # Rule 7: Low risk → Routine monitoring
+    else:
+        category = "Routine Monitoring"
+        primary_key = "watchlist_monitoring"
+        secondary_key = "watchlist_monitoring"
+        priority = "routine"
+        confidence = "high"
+        rules_triggered.append("R7: Low composite risk (<30)")
+
+    primary = INTERVENTIONS[primary_key]
+    secondary = INTERVENTIONS[secondary_key]
+
+    # Build rationale
+    rationale_parts = [f"Overall risk score: {overall:.1f} ({rating})."]
+    rationale_parts.append(f"Dominant signal: {dominant_pillar} ({pillars[dominant_pillar]:.1f}).")
+    if anomaly >= 55:
+        rationale_parts.append("Anomaly detection shows persistent elevated signals.")
+    if mc_leak >= 50:
+        rationale_parts.append("Monte Carlo simulations indicate substantial undetected leakage risk.")
+    if governance >= 60:
+        rationale_parts.append("Governance gap suggests limited institutional detection capacity.")
+    if structural >= 55:
+        rationale_parts.append("Structural vulnerability is high due to port exposure and customs weakness.")
+
+    # Escalation/monitoring threshold notes
+    if priority == "urgent":
+        esc_note = "Already at escalation level. Review for de-escalation if anomaly score falls below 50."
+        mon_note = "Continuous monitoring required. Re-assess at 90-day intervals."
+    elif priority == "elevated":
+        esc_note = f"Escalate to targeted enforcement if anomaly score rises above 55 (currently {anomaly:.0f})."
+        mon_note = "Enhanced monitoring. Re-assess at 180-day intervals."
+    else:
+        esc_note = f"Escalate to enhanced monitoring if overall score rises above 50 (currently {overall:.0f})."
+        mon_note = "Standard monitoring. Re-assess at annual review."
+
+    return {
+        "country": cname,
+        "recommendation_category": category,
+        "primary_intervention": primary_key,
+        "secondary_intervention": secondary_key,
+        "intervention_priority": priority,
+        "confidence_qualifier": confidence,
+        "escalation_threshold_note": esc_note,
+        "monitoring_threshold_note": mon_note,
+        "recommendation_rationale": " ".join(rationale_parts),
+        "rules_triggered": rules_triggered,
+        "dominant_pillar": dominant_pillar,
+        "pillar_scores": pillars,
+        "pillar_spread": spread,
+    }
+
+
+def recommendation_trace(cname, risk_row, mc_res, anomaly_df, recommendation):
+    """Build a structured explanation trace from signal to recommendation."""
+    sv = risk_row.get("sv_detail", {})
+    pillars = recommendation["pillar_scores"]
+
+    # Structural drivers (top contributors)
+    sv_components = [(k, v) for k, v in sv.items() if k != "composite"]
+    sv_components.sort(key=lambda x: x[1], reverse=True)
+    top_structural = [f"{k.replace('_', ' ').title()}: {v:.0f}" for k, v in sv_components[:3]]
+
+    # Anomaly drivers
+    anomaly_drivers = []
+    if anomaly_df is not None and len(anomaly_df) > 0:
+        ca = anomaly_df[(anomaly_df["reporter"] == cname) &
+                        (anomaly_df["partner"] == "EU27") &
+                        (anomaly_df["year"] == anomaly_df["year"].max())]
+        if len(ca) > 0:
+            if ca["spike_flag"].any():
+                anomaly_drivers.append("Export spike detection triggered")
+            if ca["cap_flag"].any():
+                anomaly_drivers.append("Capacity mismatch flagged")
+            if ca["origin_flag"].any():
+                anomaly_drivers.append("Origin shift correlation detected")
+    if not anomaly_drivers:
+        anomaly_drivers.append("No strong individual detector triggers in latest period")
+
+    # Simulation drivers
+    sim_drivers = []
+    if mc_res:
+        leak = mc_res.get("final_leak_mean", 0)
+        circ = mc_res.get("final_circ_mean", 0)
+        ls = mc_res.get("leak_mean", [])
+        if leak > 0.15:
+            sim_drivers.append(f"High projected leakage ({leak*100:.1f}%)")
+        elif leak > 0.08:
+            sim_drivers.append(f"Moderate projected leakage ({leak*100:.1f}%)")
+        else:
+            sim_drivers.append(f"Low projected leakage ({leak*100:.1f}%)")
+        if len(ls) >= 2 and ls[-1] > ls[0] * 1.1:
+            sim_drivers.append("Leakage trajectory is increasing over simulation horizon")
+    else:
+        sim_drivers.append("No simulation data available")
+
+    # Governance driver
+    gov_score = pillars.get("governance", 50)
+    if gov_score >= 65:
+        gov_driver = f"Significant governance gap ({gov_score:.0f}) — limited institutional capacity"
+    elif gov_score >= 45:
+        gov_driver = f"Moderate governance gap ({gov_score:.0f}) — partial institutional capacity"
+    else:
+        gov_driver = f"Adequate governance position ({gov_score:.0f})"
+
+    return {
+        "dominant_structural_drivers": top_structural,
+        "dominant_anomaly_drivers": anomaly_drivers,
+        "dominant_simulation_drivers": sim_drivers,
+        "dominant_governance_driver": gov_driver,
+        "overall_risk_tier": risk_row.get("rating", "Moderate"),
+        "triggered_rules": recommendation["rules_triggered"],
+        "recommendation_rationale": recommendation["recommendation_rationale"],
+        "confidence_band": recommendation["confidence_qualifier"],
+        "what_would_change_this": "",  # Filled by counterfactual_flip
+    }
+
+
+def counterfactual_flip(risk_row, recommendation):
+    """Compute what would need to change to shift the recommendation up or down."""
+    pillars = recommendation["pillar_scores"]
+    dominant = recommendation["dominant_pillar"]
+    category = recommendation["recommendation_category"]
+    overall = risk_row.get("overall", 40)
+    spread = recommendation["pillar_spread"]
+
+    # Determine robustness
+    margin_to_next = None
+    if overall >= 70:
+        margin_to_next = overall - 70
+        direction = "below 70"
+    elif overall >= 50:
+        margin_to_next = overall - 50
+        direction = "below 50"
+    elif overall >= 30:
+        margin_to_next = overall - 30
+        direction = "below 30"
+    else:
+        margin_to_next = 30 - overall
+        direction = "above 30"
+
+    robustness = "robust" if margin_to_next > 10 else "marginal"
+
+    # What would downgrade?
+    dom_val = pillars[dominant]
+    if category == "Targeted Enforcement Escalation":
+        downgrade = (f"If {dominant.replace('_', ' ')} fell below the escalation threshold "
+                     f"(e.g. anomaly < 55, currently {pillars.get('anomaly', 0):.0f}), "
+                     f"the preferred action would shift to enhanced monitoring.")
+    elif category == "Routine Monitoring":
+        downgrade = "Already at minimum monitoring level."
+    else:
+        needed_drop = margin_to_next + 1
+        downgrade = (f"A reduction of roughly {needed_drop:.0f} points in the overall score "
+                     f"(currently {overall:.1f}) would move this to a lower intervention tier. "
+                     f"The most efficient path is reducing {dominant.replace('_', ' ')} "
+                     f"(currently {dom_val:.0f}).")
+
+    # What would escalate?
+    if category in ("Targeted Enforcement Escalation",):
+        escalate = "Already at maximum escalation level."
+    elif overall < 50:
+        gap = 50 - overall
+        escalate = (f"An increase of roughly {gap:.0f} points in the overall score would "
+                    f"trigger escalation. The most sensitive lever is {dominant.replace('_', ' ')}.")
+    else:
+        gap = 70 - overall
+        escalate = (f"An increase of roughly {gap:.0f} points would shift to targeted enforcement. "
+                    f"The most decisive factor is {dominant.replace('_', ' ')} ({dom_val:.0f}).")
+
+    # Plain-English summary
+    explanation = (f"This is a {robustness} recommendation. "
+                   f"The dominant driver is {dominant.replace('_', ' ')} ({dom_val:.0f}/100). ")
+    if robustness == "marginal":
+        explanation += (f"A modest change in {dominant.replace('_', ' ')} would likely "
+                        f"shift the preferred intervention class.")
+    else:
+        explanation += "The recommendation is relatively stable under small parameter changes."
+
+    return {
+        "downgrade_condition": downgrade,
+        "escalation_condition": escalate,
+        "most_decisive_factor": dominant,
+        "robustness": robustness,
+        "margin_points": round(margin_to_next, 1),
+        "explanation": explanation,
+    }
+
+
+def intervention_comparison(recommendation, risk_row):
+    """Compare primary vs secondary intervention with derived attributes."""
+    p_key = recommendation["primary_intervention"]
+    s_key = recommendation["secondary_intervention"]
+    p = INTERVENTIONS[p_key]
+    s = INTERVENTIONS[s_key]
+    overall = risk_row.get("overall", 40)
+    anomaly = risk_row.get("anomaly", 25)
+
+    # Modulate risk reduction by relevance (higher anomaly = higher confidence in targeted)
+    anomaly_factor = min(1.0, anomaly / 60)
+
+    def _attrs(interv, key):
+        rr = interv["base_risk_reduction"]
+        # Adjust risk reduction by anomaly strength for targeted interventions
+        if key in ("targeted_customs_audit", "supplier_verification_escalation"):
+            rr = rr * (0.5 + 0.5 * anomaly_factor)
+        return {
+            "label": interv["label"],
+            "description": interv["desc"],
+            "expected_risk_reduction": f"{rr*100:.0f}%",
+            "implementation_difficulty": interv["difficulty"],
+            "deployment_speed": interv["speed"],
+            "confidence_in_relevance": interv["confidence_note"],
+            "false_positive_exposure": interv["false_positive_risk"],
+        }
+
+    p_attrs = _attrs(p, p_key)
+    s_attrs = _attrs(s, s_key)
+
+    # Why primary beats secondary
+    if p["base_risk_reduction"] > s["base_risk_reduction"]:
+        why_primary = (f"{p['label']} offers higher expected risk reduction "
+                       f"({p_attrs['expected_risk_reduction']} vs {s_attrs['expected_risk_reduction']}) "
+                       f"and is better matched to the dominant signal pattern.")
+    else:
+        why_primary = (f"{p['label']} is preferred for its faster deployment ({p['speed']}) "
+                       f"and lower implementation barrier, despite similar risk reduction.")
+
+    # When NOT to use primary
+    if p_key == "targeted_customs_audit":
+        when_not = ("Avoid if anomaly evidence is weak or primarily governance-driven — "
+                    "risk of false positives and trade friction without proportionate benefit.")
+    elif p_key == "watchlist_monitoring":
+        when_not = ("Insufficient if anomaly signals are strong and escalating — "
+                    "passive monitoring may miss an active circumvention window.")
+    elif p_key == "regional_coordination_request":
+        when_not = ("Avoid if the risk is purely domestic or if bilateral relations "
+                    "with neighboring customs authorities are strained.")
+    elif p_key == "digital_traceability_pilot":
+        when_not = ("Not appropriate for immediate response — deployment horizon is too long "
+                    "for time-sensitive enforcement needs.")
+    elif p_key == "origin_documentation_review":
+        when_not = ("Insufficient alone if circumvention involves sophisticated concealment "
+                    "beyond documentation fraud (e.g. transshipment with real processing).")
+    else:
+        when_not = "Consider secondary if resource constraints prevent primary deployment."
+
+    return {
+        "primary": p_attrs,
+        "secondary": s_attrs,
+        "why_primary_preferred": why_primary,
+        "when_not_to_use_primary": when_not,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SECTION 9: COMPARATIVE & POLICY ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════
 
 def risk_heatmap_data(anomaly_df, names, year=None):
