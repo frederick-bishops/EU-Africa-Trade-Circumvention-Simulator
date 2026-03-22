@@ -1,18 +1,26 @@
 """
-International Trade Circumvention Simulator
-==============================================
-Modular Multi-Country Rules-of-Origin Circumvention Simulator
-with Behavioral Forecasting.
+EU-Africa Trade Circumvention Simulator
+========================================
+Policy intelligence prototype and decision-support simulator for
+preferential trade integrity analysis.
 
-Single-file Streamlit application. All data is embedded; no external APIs required.
+Models Rules-of-Origin circumvention risks across 20 African EPA-
+implementing countries using anomaly detection and Monte Carlo
+behavioral simulation.
 
-Data sources (cited inline):
+Single-file Streamlit application. All data is embedded (synthetic,
+calibrated to public sources); no external APIs required.
+
+Data calibration sources (cited inline):
 - UN Comtrade (trade flow patterns, 2016-2025)
 - World Bank WGI (governance indicators, 2024 update)
 - EU Access2Markets (EPA tariff schedules / RoO protocols)
 - AfCFTA e-Tariff Book (concession schedules)
 - EPPO / OLAF (EU customs enforcement statistics)
 - World Bank Development Indicators (GDP, manufacturing share)
+
+All outputs are indicative assessments for analytical and capacity-
+building purposes, not enforcement determinations.
 """
 
 import streamlit as st
@@ -36,25 +44,45 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.title("EU-Africa Trade Circumvention Simulator")  # Main app title
-# Teal-based color palette
+
+# ── Theme detection ──────────────────────────────────────────────────
+def _is_dark_theme() -> bool:
+    try:
+        return st.get_option("theme.base") == "dark"
+    except Exception:
+        return False
+
+_DARK = _is_dark_theme()
+
+# ── Semantic design tokens ───────────────────────────────────────────
+# Light and dark token sets; CSS uses Streamlit vars where possible,
+# Python tokens drive Plotly charts and HTML where CSS vars aren't viable.
+THEME_LIGHT = {
+    "app_bg": "#FAFAF7", "panel_bg": "#FFFFFF", "sidebar_bg": "#F0EDE6",
+    "border": "#D5D0C4", "text_primary": "#1A2332", "text_secondary": "#4A5568",
+    "text_muted": "#718096", "accent": "#20808D", "accent_hover": "#1B6B76",
+    "positive": "#10B981", "negative": "#DC2626", "warning": "#D97706",
+    "chart_paper": "#FAFAF7", "chart_plot": "#F3F1EB",
+    "chart_grid": "#E2DED4", "chart_text": "#4A5568",
+}
+THEME_DARK = {
+    "app_bg": "#0E1117", "panel_bg": "#1A1D24", "sidebar_bg": "#161B22",
+    "border": "#30363D", "text_primary": "#E6EDF3", "text_secondary": "#B1BAC4",
+    "text_muted": "#8B949E", "accent": "#3DBCC9", "accent_hover": "#52D1DE",
+    "positive": "#3FB950", "negative": "#F85149", "warning": "#D29922",
+    "chart_paper": "#0E1117", "chart_plot": "#161B22",
+    "chart_grid": "#30363D", "chart_text": "#B1BAC4",
+}
+T = THEME_DARK if _DARK else THEME_LIGHT
+
+# ── Color palette (risk colors are constant across themes) ───────────
 COLORS = {
-    "primary": "#20808D",       # Muted teal
-    "secondary": "#A84B2F",     # Terra/rust
-    "dark_teal": "#1B474D",
-    "light_cyan": "#BCE2E7",
-    "mauve": "#944454",
-    "gold": "#FFC553",
-    "olive": "#848456",
-    "brown": "#6E522B",
-    "bg": "#FCFAF6",            # Off-white
-    "bg_alt": "#F3F3EE",        # Paper white
-    "text": "#13343B",          # Off-black
-    "text_muted": "#2E565D",
-    "critical": "#DC2626",
-    "high": "#F59E0B",
-    "moderate": "#3B82F6",
-    "low": "#10B981",
+    "primary": "#20808D", "secondary": "#A84B2F", "dark_teal": "#1B474D",
+    "light_cyan": "#BCE2E7", "mauve": "#944454", "gold": "#FFC553",
+    "olive": "#848456", "brown": "#6E522B",
+    "bg": T["chart_paper"], "bg_alt": T["chart_plot"],
+    "text": T["text_primary"], "text_muted": T["text_secondary"],
+    "critical": "#DC2626", "high": "#F59E0B", "moderate": "#3B82F6", "low": "#10B981",
 }
 
 RISK_COLORS = {"Critical": COLORS["critical"], "High": COLORS["high"],
@@ -64,30 +92,115 @@ CHART_SEQUENCE = [COLORS["primary"], COLORS["secondary"], COLORS["dark_teal"],
                   COLORS["mauve"], COLORS["gold"], COLORS["olive"],
                   COLORS["brown"], COLORS["light_cyan"]]
 
+# ── Shared Plotly layout template ────────────────────────────────────
+def _base_layout(**overrides):
+    """Return a Plotly layout dict aligned with the active theme."""
+    base = dict(
+        paper_bgcolor=T["chart_paper"], plot_bgcolor=T["chart_plot"],
+        font=dict(color=T["chart_text"], size=12),
+        xaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        yaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+    )
+    base.update(overrides)
+    return base
+
+# ── Global CSS ───────────────────────────────────────────────────────
+# Uses Streamlit CSS variables (--text-color, --background-color,
+# --secondary-background-color) so both dark and light mode work.
 st.markdown("""
 <style>
 .main .block-container { padding-top: 1.2rem; max-width: 1200px; }
-h1 { color: #13343B; font-weight: 700; }
-h2 { color: #1B474D; font-weight: 600; border-bottom: 2px solid #20808D; padding-bottom: .3rem; }
-h3 { color: #2E565D; font-weight: 600; }
-[data-testid="stMetricValue"] { font-size: 1.7rem; font-weight: 700; color: #13343B; }
-[data-testid="stMetricLabel"] { font-size: .82rem; color: #2E565D; }
-.stTabs [data-baseweb="tab-list"] { gap: 6px; }
-.stTabs [data-baseweb="tab"] { height: 38px; padding: 0 14px; background: #F3F3EE;
-  border-radius: 6px 6px 0 0; font-weight: 500; color: #2E565D; }
+
+/* Typography – inherits from Streamlit theme */
+h1 { color: var(--text-color); font-weight: 700; font-size: 1.55rem; }
+h2 { color: var(--text-color); font-weight: 600; font-size: 1.2rem;
+     border-bottom: 2px solid #20808D; padding-bottom: .3rem; }
+h3 { color: var(--text-color); font-weight: 600; font-size: 1.05rem; }
+
+/* Metrics */
+[data-testid="stMetricValue"] { font-size: 1.5rem; font-weight: 700; color: var(--text-color); }
+[data-testid="stMetricLabel"] { font-size: .82rem; color: var(--text-color); opacity: 0.7; }
+
+/* Tabs – flex-wrap prevents overflow at default viewport */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; flex-wrap: wrap; }
+.stTabs [data-baseweb="tab"] { height: 36px; padding: 0 12px;
+  background: var(--secondary-background-color);
+  border-radius: 6px 6px 0 0; font-weight: 500; font-size: 0.85rem;
+  color: var(--text-color); white-space: nowrap; }
 .stTabs [aria-selected="true"] { background: #20808D !important; color: white !important; }
-.risk-critical { background:#FEF2F2; border-left:4px solid #DC2626; padding:10px; border-radius:4px; margin:6px 0; }
-.risk-high     { background:#FFFBEB; border-left:4px solid #F59E0B; padding:10px; border-radius:4px; margin:6px 0; }
-.risk-moderate { background:#EFF6FF; border-left:4px solid #3B82F6; padding:10px; border-radius:4px; margin:6px 0; }
-.risk-low      { background:#ECFDF5; border-left:4px solid #10B981; padding:10px; border-radius:4px; margin:6px 0; }
-[data-testid="stSidebar"] { background-color: #F3F3EE; }
-.footer { text-align:center; color:#2E565D; font-size:.72rem; padding:18px 0; }
-.kpi-card { background:white; border:1px solid #E5E3D4; border-radius:8px;
-  padding:14px 16px; text-align:center; }
-.kpi-val  { font-size:1.6rem; font-weight:700; color:#13343B; }
-.kpi-lab  { font-size:.78rem; color:#2E565D; margin-top:2px; }
+
+/* Risk alert boxes – rgba backgrounds adapt to both themes */
+.risk-critical { background: rgba(220,38,38,0.09); border-left:4px solid #DC2626;
+  padding:10px; border-radius:4px; margin:6px 0; color: var(--text-color); }
+.risk-high { background: rgba(245,158,11,0.09); border-left:4px solid #F59E0B;
+  padding:10px; border-radius:4px; margin:6px 0; color: var(--text-color); }
+.risk-moderate { background: rgba(59,130,246,0.09); border-left:4px solid #3B82F6;
+  padding:10px; border-radius:4px; margin:6px 0; color: var(--text-color); }
+.risk-low { background: rgba(16,185,129,0.09); border-left:4px solid #10B981;
+  padding:10px; border-radius:4px; margin:6px 0; color: var(--text-color); }
+
+/* Sidebar – inherits theme; text always readable */
+[data-testid="stSidebar"] { background-color: var(--secondary-background-color); }
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] .stMarkdown li,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
+  color: var(--text-color) !important; }
+
+/* Footer */
+.footer { text-align:center; color: var(--text-color); opacity:0.55;
+  font-size:.72rem; padding:18px 0; }
+
+/* KPI cards – responsive row that wraps instead of clipping */
+.kpi-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+.kpi-card { flex: 1 1 140px; min-width: 120px;
+  background: var(--secondary-background-color);
+  border: 1px solid rgba(128,128,128,0.2); border-radius: 6px;
+  padding: 12px 14px; text-align: center; }
+.kpi-val { font-size: 1.45rem; font-weight: 700; color: var(--text-color); }
+.kpi-lab { font-size: .76rem; color: var(--text-color); opacity: 0.65; margin-top: 2px; }
+
+/* Briefing summary box */
+.briefing-box { background: var(--secondary-background-color);
+  border: 1px solid rgba(128,128,128,0.18); border-radius: 6px;
+  padding: 14px 18px; margin: 8px 0 14px 0; color: var(--text-color);
+  font-size: 0.92rem; line-height: 1.55; }
+
+/* Tables – prevent accent color bleed */
+[data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
+  color: var(--text-color) !important; }
+
+/* Subtle insignia */
+.insignia { text-align:center; font-variant:small-caps; color:var(--text-color);
+  opacity:0.35; font-size:0.68rem; margin-top:1.2rem; letter-spacing:0.06em; }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ── Glossary for technical terms ──────────────────────────────────────
+GLOSSARY = {
+    "MC Leak": "Monte Carlo Leakage — simulated rate of undetected circumvention from the behavioral model",
+    "Gov Gap": "Governance Gap — inverse of customs effectiveness and institutional quality (higher = weaker)",
+    "RoO": "Rules of Origin — criteria goods must meet to qualify for preferential tariff treatment",
+    "DFQF": "Duty-Free Quota-Free — full preferential access to the EU market under EPA terms",
+    "EPA": "Economic Partnership Agreement — trade arrangement between EU and African regional groups",
+    "HS code": "Harmonized System code — international product classification for customs declarations",
+    "AfCFTA": "African Continental Free Trade Area — pan-African trade liberalization framework",
+    "CI": "Confidence Interval — statistical range reflecting simulation uncertainty",
+    "WGI": "World Governance Indicators — World Bank institutional quality metrics",
+    "REX": "Registered Exporter system — EU self-certification scheme for origin declarations",
+    "OLAF": "European Anti-Fraud Office — investigates fraud against the EU budget",
+}
+
+
+def _glossary_help(term: str) -> str:
+    """Return glossary definition for use in help= parameters."""
+    return GLOSSARY.get(term, "")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -668,13 +781,14 @@ class Scenario:
     regional_harmonization: float = 0.0 # AfCFTA RoO harmonization
 
 
+# Canonical scenario labels: key == Scenario.name for consistency everywhere.
 SCENARIOS = {
-    "Baseline": Scenario("Baseline (Current Trajectory)", 0.0, 0.3, 0.0, 0.0, 0.0),
-    "China Rerouting Shock": Scenario("China Rerouting via West Africa", 0.6, 0.3, 0.0, 0.0, 0.0),
-    "EU Enforcement Tightening": Scenario("EU Tightens EPA RoO Enforcement", 0.0, 0.3, 0.7, 0.2, 0.1),
-    "Digital Traceability Rollout": Scenario("AfCFTA Digital Traceability Protocol", 0.0, 0.5, 0.1, 0.8, 0.4),
-    "Full AfCFTA + Harmonization": Scenario("Full AfCFTA + Harmonized RoO", 0.1, 0.8, 0.2, 0.5, 0.8),
-    "Worst Case: Multi-Shock": Scenario("Worst Case: China Rerouting + Weak Enforcement", 0.8, 0.6, 0.0, 0.0, 0.0),
+    "Baseline": Scenario("Baseline", 0.0, 0.3, 0.0, 0.0, 0.0),
+    "China Rerouting Shock": Scenario("China Rerouting Shock", 0.6, 0.3, 0.0, 0.0, 0.0),
+    "EU Enforcement Tightening": Scenario("EU Enforcement Tightening", 0.0, 0.3, 0.7, 0.2, 0.1),
+    "Digital Traceability Rollout": Scenario("Digital Traceability Rollout", 0.0, 0.5, 0.1, 0.8, 0.4),
+    "Full AfCFTA + Harmonization": Scenario("Full AfCFTA + Harmonization", 0.1, 0.8, 0.2, 0.5, 0.8),
+    "Worst Case: Multi-Shock": Scenario("Worst Case: Multi-Shock", 0.8, 0.6, 0.0, 0.0, 0.0),
 }
 
 
@@ -834,7 +948,459 @@ def all_risk_scores(names, anomaly_df, mc_results, gov_df):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SECTION 8: COMPARATIVE & POLICY ANALYSIS
+# SECTION 8: RECOMMENDATION RULES ENGINE & REASONING LAYER
+# ═══════════════════════════════════════════════════════════════════════
+# Explicit, inspectable rules that map existing model outputs into
+# recommendation classes with traces and counterfactuals.
+
+# ── Intervention catalog ─────────────────────────────────────────────
+INTERVENTIONS = {
+    "targeted_customs_audit": {
+        "label": "Targeted Customs Audit",
+        "desc": "Risk-profiled inspections at ports of export, focused on flagged HS categories",
+        "base_risk_reduction": 0.22, "difficulty": "moderate", "speed": "weeks",
+        "confidence_note": "High where anomaly evidence is strong",
+        "false_positive_risk": "moderate",
+    },
+    "origin_documentation_review": {
+        "label": "Origin Documentation Review",
+        "desc": "Systematic verification of EUR.1 / REX certificates against production evidence",
+        "base_risk_reduction": 0.15, "difficulty": "low", "speed": "weeks",
+        "confidence_note": "Reliable for documentation-based circumvention",
+        "false_positive_risk": "low",
+    },
+    "supplier_verification_escalation": {
+        "label": "Supplier Verification Escalation",
+        "desc": "End-to-end supply chain audit of flagged exporters and their input sources",
+        "base_risk_reduction": 0.28, "difficulty": "high", "speed": "months",
+        "confidence_note": "High precision but resource-intensive",
+        "false_positive_risk": "low",
+    },
+    "watchlist_monitoring": {
+        "label": "Watchlist Monitoring",
+        "desc": "Ongoing statistical monitoring of trade patterns for escalation triggers",
+        "base_risk_reduction": 0.08, "difficulty": "low", "speed": "immediate",
+        "confidence_note": "Low false-positive risk; limited direct impact",
+        "false_positive_risk": "very low",
+    },
+    "regional_coordination_request": {
+        "label": "Regional Coordination Request",
+        "desc": "Cross-border intelligence sharing with neighboring customs authorities",
+        "base_risk_reduction": 0.18, "difficulty": "high", "speed": "months",
+        "confidence_note": "Effective for spillover and rerouting patterns",
+        "false_positive_risk": "low",
+    },
+    "digital_traceability_pilot": {
+        "label": "Digital Traceability Pilot",
+        "desc": "Electronic origin verification linked to AfCFTA Digital Trade Protocol",
+        "base_risk_reduction": 0.25, "difficulty": "high", "speed": "quarters",
+        "confidence_note": "High systemic impact but long deployment horizon",
+        "false_positive_risk": "very low",
+    },
+}
+
+# ── Scenario causal mapping ──────────────────────────────────────────
+SCENARIO_CAUSAL_MAP = {
+    "rerouting_pressure": {
+        "label": "External Rerouting Pressure",
+        "policy_lever": "Trade diversion from supply-chain disruptions",
+        "affects": [
+            ("circumvention_probability", "increase", "strong"),
+            ("detection_difficulty", "increase", "moderate"),
+        ],
+        "transmission": "Supply-chain shifts increase rerouting through EPA countries, "
+                        "raising circumvention incentives while straining detection capacity.",
+        "policy_interpretation": "Represents external shocks (e.g. tariff escalation, "
+                                 "supply-chain restructuring) pushing trade through preferential corridors.",
+    },
+    "afcfta_liberalization": {
+        "label": "AfCFTA Trade Liberalization",
+        "policy_lever": "Intra-African market opening",
+        "affects": [
+            ("trade_volume", "increase", "strong"),
+            ("origin_complexity", "increase", "moderate"),
+            ("circumvention_opportunity", "increase", "moderate"),
+        ],
+        "transmission": "Increased intra-African trade creates additional origin pathways, "
+                        "potentially enabling origin-shopping and complicating cumulation verification.",
+        "policy_interpretation": "Models the trade creation and diversion effects of AfCFTA implementation.",
+    },
+    "epa_tightening": {
+        "label": "EU EPA Enforcement Tightening",
+        "policy_lever": "Stricter Rules of Origin enforcement by EU",
+        "affects": [
+            ("expected_penalty", "increase", "strong"),
+            ("rerouting_incentive", "decrease", "moderate"),
+            ("detection_probability", "increase", "strong"),
+            ("concealment_behavior", "possible shift", "moderate"),
+        ],
+        "transmission": "Higher enforcement raises the expected cost of circumvention, "
+                        "reducing the net incentive. May shift behavior toward harder-to-detect methods.",
+        "policy_interpretation": "Represents tighter REX verification, post-clearance audits, "
+                                 "and cross-referencing of origin declarations.",
+    },
+    "digital_traceability": {
+        "label": "Digital Traceability Rollout",
+        "policy_lever": "Electronic origin verification systems",
+        "affects": [
+            ("documentation_reliability", "increase", "strong"),
+            ("undetected_circumvention", "decrease", "strong"),
+            ("detection_effectiveness", "increase", "strong"),
+            ("anomaly_persistence", "decrease", "moderate"),
+        ],
+        "transmission": "Digital origin certificates and blockchain-based tracking improve "
+                        "documentation integrity and reduce false-documentation circumvention.",
+        "policy_interpretation": "Models deployment of AfCFTA Digital Trade Protocol and "
+                                 "integration with EU REX system.",
+    },
+    "regional_harmonization": {
+        "label": "Regional RoO Harmonization",
+        "policy_lever": "AfCFTA harmonization of Rules of Origin across EPA groups",
+        "affects": [
+            ("origin_shopping_incentive", "decrease", "strong"),
+            ("cumulation_complexity", "decrease", "moderate"),
+            ("compliance_cost", "decrease", "moderate"),
+        ],
+        "transmission": "Harmonized rules reduce the incentive to exploit gaps between EPA-specific "
+                        "and AfCFTA general rules, narrowing structural arbitrage.",
+        "policy_interpretation": "Models convergence of regional RoO regimes, reducing the "
+                                 "policy fragmentation that enables circumvention.",
+    },
+}
+
+
+def recommendation_rules_engine(cname, risk_row, mc_res, anomaly_df):
+    """Generate a formal recommendation from explicit, inspectable rules.
+
+    Rules are checked in priority order. Each rule is named, its conditions
+    are stated, and the output is a structured recommendation object.
+    """
+    structural = risk_row.get("structural", 50)
+    anomaly = risk_row.get("anomaly", 25)
+    mc_leak = risk_row.get("mc_leak", 25)
+    governance = risk_row.get("governance", 50)
+    overall = risk_row.get("overall", 40)
+    rating = risk_row.get("rating", "Moderate")
+    sv = risk_row.get("sv_detail", {})
+
+    # Pillar spread (for confidence assessment)
+    pillars = {"structural": structural, "anomaly": anomaly,
+               "mc_leak": mc_leak, "governance": governance}
+    spread = max(pillars.values()) - min(pillars.values())
+    dominant_pillar = max(pillars, key=pillars.get)
+
+    rules_triggered = []
+
+    # Rule 1: Triple-high → Targeted Enforcement Escalation
+    if anomaly >= 55 and structural >= 50 and mc_leak >= 45:
+        category = "Targeted Enforcement Escalation"
+        primary_key = "targeted_customs_audit"
+        secondary_key = "supplier_verification_escalation"
+        priority = "urgent"
+        confidence = "high" if spread < 35 else "moderate"
+        rules_triggered.append("R1: High anomaly (≥55) + high structural (≥50) + elevated MC leakage (≥45)")
+
+    # Rule 2: High structural but weak anomaly → Enhanced Monitoring
+    elif structural >= 50 and anomaly < 45:
+        category = "Enhanced Monitoring & Evidence Development"
+        primary_key = "watchlist_monitoring"
+        secondary_key = "origin_documentation_review"
+        priority = "standard"
+        confidence = "moderate"
+        rules_triggered.append("R2: High structural vulnerability (≥50) but limited anomaly evidence (<45)")
+
+    # Rule 3: High MC leakage + moderate signals → Contingency Planning
+    elif mc_leak >= 50 and overall >= 45:
+        category = "Contingency Planning"
+        primary_key = "regional_coordination_request"
+        secondary_key = "digital_traceability_pilot"
+        priority = "elevated"
+        confidence = "moderate"
+        rules_triggered.append("R3: Elevated simulation risk (MC ≥50) with moderate composite (≥45)")
+
+    # Rule 4: High composite but no single dominant pillar → Verification
+    elif overall >= 50 and spread < 25:
+        category = "Broad Verification"
+        primary_key = "origin_documentation_review"
+        secondary_key = "targeted_customs_audit"
+        priority = "elevated"
+        confidence = "low"
+        rules_triggered.append("R4: Elevated composite (≥50) but diffuse signal (spread <25)")
+
+    # Rule 5: High governance gap → Institutional Capacity Building
+    elif governance >= 60 and structural >= 40:
+        category = "Institutional Capacity Building"
+        primary_key = "digital_traceability_pilot"
+        secondary_key = "watchlist_monitoring"
+        priority = "standard"
+        confidence = "moderate"
+        rules_triggered.append("R5: High governance gap (≥60) with structural exposure (≥40)")
+
+    # Rule 6: Moderate overall risk
+    elif overall >= 30:
+        category = "Standard Surveillance"
+        primary_key = "watchlist_monitoring"
+        secondary_key = "origin_documentation_review"
+        priority = "routine"
+        confidence = "moderate"
+        rules_triggered.append("R6: Moderate composite risk (30-50)")
+
+    # Rule 7: Low risk → Routine monitoring
+    else:
+        category = "Routine Monitoring"
+        primary_key = "watchlist_monitoring"
+        secondary_key = "watchlist_monitoring"
+        priority = "routine"
+        confidence = "high"
+        rules_triggered.append("R7: Low composite risk (<30)")
+
+    primary = INTERVENTIONS[primary_key]
+    secondary = INTERVENTIONS[secondary_key]
+
+    # Build rationale
+    rationale_parts = [f"Overall risk score: {overall:.1f} ({rating})."]
+    rationale_parts.append(f"Dominant signal: {dominant_pillar} ({pillars[dominant_pillar]:.1f}).")
+    if anomaly >= 55:
+        rationale_parts.append("Anomaly detection shows persistent elevated signals.")
+    if mc_leak >= 50:
+        rationale_parts.append("Monte Carlo simulations indicate substantial undetected leakage risk.")
+    if governance >= 60:
+        rationale_parts.append("Governance gap suggests limited institutional detection capacity.")
+    if structural >= 55:
+        rationale_parts.append("Structural vulnerability is high due to port exposure and customs weakness.")
+
+    # Escalation/monitoring threshold notes
+    if priority == "urgent":
+        esc_note = "Already at escalation level. Review for de-escalation if anomaly score falls below 50."
+        mon_note = "Continuous monitoring required. Re-assess at 90-day intervals."
+    elif priority == "elevated":
+        esc_note = f"Escalate to targeted enforcement if anomaly score rises above 55 (currently {anomaly:.0f})."
+        mon_note = "Enhanced monitoring. Re-assess at 180-day intervals."
+    else:
+        esc_note = f"Escalate to enhanced monitoring if overall score rises above 50 (currently {overall:.0f})."
+        mon_note = "Standard monitoring. Re-assess at annual review."
+
+    return {
+        "country": cname,
+        "recommendation_category": category,
+        "primary_intervention": primary_key,
+        "secondary_intervention": secondary_key,
+        "intervention_priority": priority,
+        "confidence_qualifier": confidence,
+        "escalation_threshold_note": esc_note,
+        "monitoring_threshold_note": mon_note,
+        "recommendation_rationale": " ".join(rationale_parts),
+        "rules_triggered": rules_triggered,
+        "dominant_pillar": dominant_pillar,
+        "pillar_scores": pillars,
+        "pillar_spread": spread,
+    }
+
+
+def recommendation_trace(cname, risk_row, mc_res, anomaly_df, recommendation):
+    """Build a structured explanation trace from signal to recommendation."""
+    sv = risk_row.get("sv_detail", {})
+    pillars = recommendation["pillar_scores"]
+
+    # Structural drivers (top contributors)
+    sv_components = [(k, v) for k, v in sv.items() if k != "composite"]
+    sv_components.sort(key=lambda x: x[1], reverse=True)
+    top_structural = [f"{k.replace('_', ' ').title()}: {v:.0f}" for k, v in sv_components[:3]]
+
+    # Anomaly drivers
+    anomaly_drivers = []
+    if anomaly_df is not None and len(anomaly_df) > 0:
+        ca = anomaly_df[(anomaly_df["reporter"] == cname) &
+                        (anomaly_df["partner"] == "EU27") &
+                        (anomaly_df["year"] == anomaly_df["year"].max())]
+        if len(ca) > 0:
+            if ca["spike_flag"].any():
+                anomaly_drivers.append("Export spike detection triggered")
+            if ca["cap_flag"].any():
+                anomaly_drivers.append("Capacity mismatch flagged")
+            if ca["origin_flag"].any():
+                anomaly_drivers.append("Origin shift correlation detected")
+    if not anomaly_drivers:
+        anomaly_drivers.append("No strong individual detector triggers in latest period")
+
+    # Simulation drivers
+    sim_drivers = []
+    if mc_res:
+        leak = mc_res.get("final_leak_mean", 0)
+        circ = mc_res.get("final_circ_mean", 0)
+        ls = mc_res.get("leak_mean", [])
+        if leak > 0.15:
+            sim_drivers.append(f"High projected leakage ({leak*100:.1f}%)")
+        elif leak > 0.08:
+            sim_drivers.append(f"Moderate projected leakage ({leak*100:.1f}%)")
+        else:
+            sim_drivers.append(f"Low projected leakage ({leak*100:.1f}%)")
+        if len(ls) >= 2 and ls[-1] > ls[0] * 1.1:
+            sim_drivers.append("Leakage trajectory is increasing over simulation horizon")
+    else:
+        sim_drivers.append("No simulation data available")
+
+    # Governance driver
+    gov_score = pillars.get("governance", 50)
+    if gov_score >= 65:
+        gov_driver = f"Significant governance gap ({gov_score:.0f}) — limited institutional capacity"
+    elif gov_score >= 45:
+        gov_driver = f"Moderate governance gap ({gov_score:.0f}) — partial institutional capacity"
+    else:
+        gov_driver = f"Adequate governance position ({gov_score:.0f})"
+
+    return {
+        "dominant_structural_drivers": top_structural,
+        "dominant_anomaly_drivers": anomaly_drivers,
+        "dominant_simulation_drivers": sim_drivers,
+        "dominant_governance_driver": gov_driver,
+        "overall_risk_tier": risk_row.get("rating", "Moderate"),
+        "triggered_rules": recommendation["rules_triggered"],
+        "recommendation_rationale": recommendation["recommendation_rationale"],
+        "confidence_band": recommendation["confidence_qualifier"],
+        "what_would_change_this": "",  # Filled by counterfactual_flip
+    }
+
+
+def counterfactual_flip(risk_row, recommendation):
+    """Compute what would need to change to shift the recommendation up or down."""
+    pillars = recommendation["pillar_scores"]
+    dominant = recommendation["dominant_pillar"]
+    category = recommendation["recommendation_category"]
+    overall = risk_row.get("overall", 40)
+    spread = recommendation["pillar_spread"]
+
+    # Determine robustness
+    margin_to_next = None
+    if overall >= 70:
+        margin_to_next = overall - 70
+        direction = "below 70"
+    elif overall >= 50:
+        margin_to_next = overall - 50
+        direction = "below 50"
+    elif overall >= 30:
+        margin_to_next = overall - 30
+        direction = "below 30"
+    else:
+        margin_to_next = 30 - overall
+        direction = "above 30"
+
+    robustness = "robust" if margin_to_next > 10 else "marginal"
+
+    # What would downgrade?
+    dom_val = pillars[dominant]
+    if category == "Targeted Enforcement Escalation":
+        downgrade = (f"If {dominant.replace('_', ' ')} fell below the escalation threshold "
+                     f"(e.g. anomaly < 55, currently {pillars.get('anomaly', 0):.0f}), "
+                     f"the preferred action would shift to enhanced monitoring.")
+    elif category == "Routine Monitoring":
+        downgrade = "Already at minimum monitoring level."
+    else:
+        needed_drop = margin_to_next + 1
+        downgrade = (f"A reduction of roughly {needed_drop:.0f} points in the overall score "
+                     f"(currently {overall:.1f}) would move this to a lower intervention tier. "
+                     f"The most efficient path is reducing {dominant.replace('_', ' ')} "
+                     f"(currently {dom_val:.0f}).")
+
+    # What would escalate?
+    if category in ("Targeted Enforcement Escalation",):
+        escalate = "Already at maximum escalation level."
+    elif overall < 50:
+        gap = 50 - overall
+        escalate = (f"An increase of roughly {gap:.0f} points in the overall score would "
+                    f"trigger escalation. The most sensitive lever is {dominant.replace('_', ' ')}.")
+    else:
+        gap = 70 - overall
+        escalate = (f"An increase of roughly {gap:.0f} points would shift to targeted enforcement. "
+                    f"The most decisive factor is {dominant.replace('_', ' ')} ({dom_val:.0f}).")
+
+    # Plain-English summary
+    explanation = (f"This is a {robustness} recommendation. "
+                   f"The dominant driver is {dominant.replace('_', ' ')} ({dom_val:.0f}/100). ")
+    if robustness == "marginal":
+        explanation += (f"A modest change in {dominant.replace('_', ' ')} would likely "
+                        f"shift the preferred intervention class.")
+    else:
+        explanation += "The recommendation is relatively stable under small parameter changes."
+
+    return {
+        "downgrade_condition": downgrade,
+        "escalation_condition": escalate,
+        "most_decisive_factor": dominant,
+        "robustness": robustness,
+        "margin_points": round(margin_to_next, 1),
+        "explanation": explanation,
+    }
+
+
+def intervention_comparison(recommendation, risk_row):
+    """Compare primary vs secondary intervention with derived attributes."""
+    p_key = recommendation["primary_intervention"]
+    s_key = recommendation["secondary_intervention"]
+    p = INTERVENTIONS[p_key]
+    s = INTERVENTIONS[s_key]
+    overall = risk_row.get("overall", 40)
+    anomaly = risk_row.get("anomaly", 25)
+
+    # Modulate risk reduction by relevance (higher anomaly = higher confidence in targeted)
+    anomaly_factor = min(1.0, anomaly / 60)
+
+    def _attrs(interv, key):
+        rr = interv["base_risk_reduction"]
+        # Adjust risk reduction by anomaly strength for targeted interventions
+        if key in ("targeted_customs_audit", "supplier_verification_escalation"):
+            rr = rr * (0.5 + 0.5 * anomaly_factor)
+        return {
+            "label": interv["label"],
+            "description": interv["desc"],
+            "expected_risk_reduction": f"{rr*100:.0f}%",
+            "implementation_difficulty": interv["difficulty"],
+            "deployment_speed": interv["speed"],
+            "confidence_in_relevance": interv["confidence_note"],
+            "false_positive_exposure": interv["false_positive_risk"],
+        }
+
+    p_attrs = _attrs(p, p_key)
+    s_attrs = _attrs(s, s_key)
+
+    # Why primary beats secondary
+    if p["base_risk_reduction"] > s["base_risk_reduction"]:
+        why_primary = (f"{p['label']} offers higher expected risk reduction "
+                       f"({p_attrs['expected_risk_reduction']} vs {s_attrs['expected_risk_reduction']}) "
+                       f"and is better matched to the dominant signal pattern.")
+    else:
+        why_primary = (f"{p['label']} is preferred for its faster deployment ({p['speed']}) "
+                       f"and lower implementation barrier, despite similar risk reduction.")
+
+    # When NOT to use primary
+    if p_key == "targeted_customs_audit":
+        when_not = ("Avoid if anomaly evidence is weak or primarily governance-driven — "
+                    "risk of false positives and trade friction without proportionate benefit.")
+    elif p_key == "watchlist_monitoring":
+        when_not = ("Insufficient if anomaly signals are strong and escalating — "
+                    "passive monitoring may miss an active circumvention window.")
+    elif p_key == "regional_coordination_request":
+        when_not = ("Avoid if the risk is purely domestic or if bilateral relations "
+                    "with neighboring customs authorities are strained.")
+    elif p_key == "digital_traceability_pilot":
+        when_not = ("Not appropriate for immediate response — deployment horizon is too long "
+                    "for time-sensitive enforcement needs.")
+    elif p_key == "origin_documentation_review":
+        when_not = ("Insufficient alone if circumvention involves sophisticated concealment "
+                    "beyond documentation fraud (e.g. transshipment with real processing).")
+    else:
+        when_not = "Consider secondary if resource constraints prevent primary deployment."
+
+    return {
+        "primary": p_attrs,
+        "secondary": s_attrs,
+        "why_primary_preferred": why_primary,
+        "when_not_to_use_primary": when_not,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SECTION 9: COMPARATIVE & POLICY ANALYSIS
 # ═══════════════════════════════════════════════════════════════════════
 
 def risk_heatmap_data(anomaly_df, names, year=None):
@@ -1038,30 +1604,37 @@ def fig_risk_bars(rdf):
     fig = go.Figure(go.Bar(
         y=d["country"], x=d["overall"], orientation="h",
         marker_color=colors, text=[f"{v:.1f}" for v in d["overall"]],
-        textposition="outside",
+        textposition="outside", textfont=dict(color=T["chart_text"]),
         hovertemplate="<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>"))
-    fig.update_layout(
-        xaxis=dict(title="Risk Score (0-100)", range=[0, 105]),
-        height=max(400, len(d) * 32 + 100), margin=dict(l=120, r=60, t=20, b=30),
-        paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg_alt"], showlegend=False)
+    fig.update_layout(**_base_layout(
+        xaxis=dict(title="Risk Score (0-100)", range=[0, 108],
+                   gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        yaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=max(400, len(d) * 32 + 100),
+        margin=dict(l=140, r=60, t=20, b=30), showlegend=False))
     return fig
 
 
 def fig_heatmap(hdf, title=""):
     if hdf.empty:
         fig = go.Figure()
-        fig.add_annotation(text="No data", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+        fig.add_annotation(text="No data", xref="paper", yref="paper",
+                           x=0.5, y=0.5, showarrow=False, font=dict(color=T["chart_text"]))
+        fig.update_layout(**_base_layout())
         return fig
     fig = go.Figure(go.Heatmap(
         z=hdf.values, x=[c[:28] for c in hdf.columns], y=hdf.index,
         colorscale=[[0, "#E8F5E9"], [.25, "#FFF9C4"], [.5, "#FFE0B2"], [.75, "#FFAB91"], [1, "#EF5350"]],
-        colorbar=dict(title="Score"),
+        colorbar=dict(title="Score", tickfont=dict(color=T["chart_text"]),
+                      titlefont=dict(color=T["chart_text"])),
         hovertemplate="Country: %{y}<br>Category: %{x}<br>Score: %{z:.1f}<extra></extra>"))
-    fig.update_layout(title=dict(text=title, font_size=14),
-                      xaxis=dict(tickangle=45, tickfont_size=9), yaxis_tickfont_size=11,
-                      height=max(400, len(hdf) * 35 + 150),
-                      margin=dict(l=120, r=30, t=50, b=120),
-                      paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg"])
+    fig.update_layout(**_base_layout(
+        title=dict(text=title, font_size=13, font_color=T["chart_text"]),
+        xaxis=dict(tickangle=45, tickfont_size=9, gridcolor=T["chart_grid"],
+                   zerolinecolor=T["chart_grid"]),
+        yaxis=dict(tickfont_size=11, gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=max(400, len(hdf) * 35 + 150),
+        margin=dict(l=140, r=30, t=50, b=130)))
     return fig
 
 
@@ -1080,11 +1653,14 @@ def fig_mc_fan(mc, title=""):
                              fillcolor="rgba(32,128,141,.25)", line_color="rgba(32,128,141,0)", name="50% CI"))
     fig.add_trace(go.Scatter(x=labs, y=m, mode="lines+markers", name="Mean",
                              line=dict(color=COLORS["primary"], width=3), marker_size=8))
-    fig.update_layout(title=dict(text=title, font_size=14),
-                      yaxis=dict(title="Leakage Rate (%)", rangemode="tozero"),
-                      height=380, margin=dict(l=50, r=30, t=50, b=30),
-                      paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg_alt"],
-                      legend=dict(orientation="h", y=1.08, x=1, xanchor="right"))
+    fig.update_layout(**_base_layout(
+        title=dict(text=title, font_size=13, font_color=T["chart_text"]),
+        yaxis=dict(title="Leakage Rate (%)", rangemode="tozero",
+                   gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        xaxis=dict(gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=380, margin=dict(l=55, r=30, t=50, b=30),
+        legend=dict(orientation="h", y=1.08, x=1, xanchor="right",
+                    font=dict(color=T["chart_text"]))))
     return fig
 
 
@@ -1098,13 +1674,15 @@ def fig_scenario_bars(sdf, title=""):
                      array=(d["CI High %"] - d["Leakage Mean %"]).tolist(),
                      arrayminus=(d["Leakage Mean %"] - d["CI Low %"]).tolist(), color="#666"),
         text=[f"{v:.1f}%" for v in d["Leakage Mean %"]], textposition="outside",
+        textfont=dict(color=T["chart_text"]),
         hovertemplate="<b>%{y}</b><br>Leakage: %{x:.1f}%<extra></extra>"))
-    fig.update_layout(title=dict(text=title, font_size=14),
-                      xaxis=dict(title="Leakage Rate (%)", rangemode="tozero"),
-                      yaxis_tickfont_size=10,
-                      height=max(350, len(d) * 55 + 80),
-                      margin=dict(l=260, r=70, t=50, b=30),
-                      paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg_alt"], showlegend=False)
+    fig.update_layout(**_base_layout(
+        title=dict(text=title, font_size=13, font_color=T["chart_text"]),
+        xaxis=dict(title="Leakage Rate (%)", rangemode="tozero",
+                   gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        yaxis=dict(tickfont_size=10, gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=max(350, len(d) * 55 + 80),
+        margin=dict(l=260, r=70, t=50, b=30), showlegend=False))
     return fig
 
 
@@ -1116,10 +1694,12 @@ def fig_trade_ts(tdf, cname, partner="EU27"):
                              line=dict(color=COLORS["primary"], width=2.5), mode="lines+markers"))
     fig.add_trace(go.Scatter(x=agg["year"], y=agg["imports"], name="Imports",
                              line=dict(color=COLORS["secondary"], width=2.5, dash="dash"), mode="lines+markers"))
-    fig.update_layout(xaxis=dict(title="Year", dtick=1), yaxis_title="USD",
-                      height=360, margin=dict(l=60, r=30, t=30, b=30),
-                      paper_bgcolor=COLORS["bg"], plot_bgcolor=COLORS["bg_alt"],
-                      legend=dict(orientation="h", y=1.08, x=1, xanchor="right"))
+    fig.update_layout(**_base_layout(
+        xaxis=dict(title="Year", dtick=1, gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        yaxis=dict(title="USD", gridcolor=T["chart_grid"], zerolinecolor=T["chart_grid"]),
+        height=360, margin=dict(l=65, r=30, t=30, b=30),
+        legend=dict(orientation="h", y=1.08, x=1, xanchor="right",
+                    font=dict(color=T["chart_text"]))))
     return fig
 
 
@@ -1131,8 +1711,14 @@ def fig_radar(regdf):
         fig.add_trace(go.Scatterpolar(r=vals, theta=cats + [cats[0]], fill="toself",
                                        name=r["Region"],
                                        line_color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)]))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-                      height=430, margin=dict(l=70, r=70, t=30, b=30), paper_bgcolor=COLORS["bg"])
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100],
+                                   gridcolor=T["chart_grid"]),
+                   angularaxis=dict(gridcolor=T["chart_grid"])),
+        height=430, margin=dict(l=70, r=70, t=30, b=30),
+        paper_bgcolor=T["chart_paper"],
+        font=dict(color=T["chart_text"]),
+        legend=dict(font=dict(color=T["chart_text"])))
     return fig
 
 
@@ -1142,12 +1728,13 @@ def fig_radar(regdf):
 
 def render_sidebar():
     with st.sidebar:
-        st.title("EU-Africa Trade Circumvention Simulator")
-        st.caption("Updated")
+        st.markdown("### EU-Africa Trade Circumvention Simulator")
+        st.caption("Data model v2.1 · Sources calibrated to 2023-24")
         st.markdown("---")
 
-        st.subheader("Country Selection")
-        mode = st.radio("Select by:", ["Individual", "EPA Group", "Region", "All 20"], key="sel_mode")
+        st.markdown("**Country Selection**")
+        mode = st.radio("Selection mode", ["Individual", "EPA Group", "Region", "All 20"],
+                        key="sel_mode", label_visibility="collapsed")
         all_names = sorted(COUNTRIES.keys())
         if mode == "Individual":
             sel = st.multiselect("Countries:", all_names,
@@ -1157,27 +1744,29 @@ def render_sidebar():
         elif mode == "EPA Group":
             g = st.selectbox("EPA group:", list(EPA_GROUPS.keys()), key="epa_g")
             sel = EPA_GROUPS[g]
-            st.info(f"Countries: {', '.join(sel)}")
+            st.caption(f"Countries: {', '.join(sel)}")
         elif mode == "Region":
             r = st.selectbox("Region:", list(REGION_CLUSTERS.keys()), key="reg_r")
             sel = REGION_CLUSTERS[r]
-            st.info(f"Countries: {', '.join(sel)}")
+            st.caption(f"Countries: {', '.join(sel)}")
         else:
             sel = all_names
 
         st.markdown("---")
-        st.subheader("Detection Parameters")
+        st.markdown("**Detection Parameters**")
         z_th = st.slider("Export spike Z-threshold", 1.0, 4.0, 2.0, 0.25,
-                         help="Std deviations above mean to flag")
+                         help="Standard deviations above expanding mean to flag as anomalous")
         cap_th = st.slider("Capacity mismatch threshold", 1.0, 3.0, 1.5, 0.1,
-                           help="Export / production-capacity ratio")
-        n_sim = st.select_slider("Monte Carlo iterations",
-                                 [1000, 2000, 3000, 5000, 10000], 3000,
-                                 help="More = precise but slower")
+                           help="Export-to-production-capacity ratio above which to flag")
+        mc_options = [1000, 2000, 3000, 5000, 10000]
+        mc_labels = ["1K", "2K", "3K", "5K", "10K"]
+        n_sim = st.select_slider("Monte Carlo iterations", options=mc_options,
+                                 value=3000, format_func=lambda x: mc_labels[mc_options.index(x)],
+                                 help="Number of simulation runs (more = precise but slower)")
 
         st.markdown("---")
-        st.subheader("Scenario")
-        sc_name = st.selectbox("Select scenario:", list(SCENARIOS.keys()), key="sc_sel")
+        st.markdown("**Scenario**")
+        sc_name = st.selectbox("Active scenario:", list(SCENARIOS.keys()), key="sc_sel")
         sc = SCENARIOS[sc_name]
         with st.expander("Scenario parameters"):
             st.write(f"Rerouting pressure: {sc.rerouting_pressure:.1f}")
@@ -1187,23 +1776,31 @@ def render_sidebar():
             st.write(f"Regional harmonization: {sc.regional_harmonization:.1f}")
 
         st.markdown("---")
-        with st.expander("About"):
+        with st.expander("About this tool"):
             st.markdown("""
-**Rules-of-Origin Circumvention Simulator**
+**EU-Africa Trade Circumvention Simulator**
 
-Models the overlap between EU EPAs and AfCFTA liberalization as a strategic
-arbitrage game, identifying circumvention risks across 20 African countries.
+A policy intelligence prototype that models the overlap between EU Economic
+Partnership Agreements (EPAs) and AfCFTA liberalization as a strategic
+arbitrage game, estimating circumvention risks across 20 African countries.
 
 **Methods:** Z-score anomaly detection, capacity-mismatch analysis, origin-shift
 correlation, Monte Carlo behavioral simulation (firm + state agents).
 
-**Data:** Modeled trade flows calibrated to UN Comtrade patterns, WGI governance
-indicators, EU Access2Markets tariff schedules, EPPO/OLAF enforcement stats.
+**Data:** Synthetic trade flows calibrated to UN Comtrade patterns, WGI governance
+indicators, EU Access2Markets tariff schedules, EPPO/OLAF enforcement statistics.
+
+This is a decision-support simulator, not an enforcement system. All outputs
+are indicative assessments intended for analytical capacity-building.
             """)
         with st.expander("Disclaimer"):
-            st.warning("Simulation-based modeling with data calibrated to public "
-                       "sources. Results are indicative risk assessments for capacity-building, "
-                       "not precise predictions. Framed as neutral diagnostics.")
+            st.caption("Simulation-based modeling with data calibrated to public "
+                       "sources. Results are indicative risk assessments for analytical "
+                       "and capacity-building purposes, not precise predictions or "
+                       "enforcement determinations.")
+
+        st.markdown('<div class="insignia">Decision-Support Prototype</div>',
+                    unsafe_allow_html=True)
 
         return sel, z_th, cap_th, n_sim, sc_name
 
@@ -1227,16 +1824,40 @@ def tab_overview(rdf, adf, mc, sel, sc_name):
     avg_l = np.mean([r["final_leak_mean"] for r in mc.values()]) * 100
     eu_exp = adf[(adf["partner"] == "EU27") & (adf["year"] == adf["year"].max())]["export_usd"].sum()
 
-    cols = st.columns(5)
-    for col, (lab, val) in zip(cols, [
-        ("Countries", str(len(sel))),
-        ("Critical + High", f"{nc + nh}"),
-        ("Avg Risk Score", f"{avg_r:.1f}"),
-        ("Avg Leakage", f"{avg_l:.1f}%"),
-        ("EU Exports (latest)", fmt_usd(eu_exp)),
-    ]):
-        col.markdown(f'<div class="kpi-card"><div class="kpi-val">{val}</div>'
-                     f'<div class="kpi-lab">{lab}</div></div>', unsafe_allow_html=True)
+    # KPI row: flex-wrap layout prevents clipping at narrow viewports
+    kpis = [("Countries Analyzed", str(len(sel))),
+            ("Critical + High", f"{nc + nh}"),
+            ("Avg Risk Score", f"{avg_r:.1f}"),
+            ("Avg MC Leakage", f"{avg_l:.1f}%"),
+            ("EU Exports (latest yr)", fmt_usd(eu_exp))]
+    kpi_html = '<div class="kpi-row">' + "".join(
+        f'<div class="kpi-card"><div class="kpi-val">{val}</div>'
+        f'<div class="kpi-lab">{lab}</div></div>' for lab, val in kpis
+    ) + '</div>'
+    st.markdown(kpi_html, unsafe_allow_html=True)
+
+    # Analytical summary
+    if len(rdf) > 0:
+        top = rdf.iloc[0]
+        driver_means = {"structural": rdf["structural"].mean(),
+                        "anomaly": rdf["anomaly"].mean(),
+                        "mc_leak": rdf["mc_leak"].mean(),
+                        "governance": rdf["governance"].mean()}
+        strongest = max(driver_means, key=driver_means.get)
+        # Find which country is most scenario-sensitive (highest MC spread)
+        mc_spreads = {}
+        for c, mr in mc.items():
+            ci = mr.get("final_leak_ci90", (0, 0))
+            mc_spreads[c] = (ci[1] - ci[0]) * 100
+        most_sensitive = max(mc_spreads, key=mc_spreads.get) if mc_spreads else top["country"]
+        st.markdown(
+            f'<div class="briefing-box">'
+            f'<strong>Dominant risk:</strong> {top["country"]} ({top["overall"]:.1f}, {top["rating"]}). '
+            f'<strong>Strongest driver:</strong> {strongest.replace("_", " ")} '
+            f'(portfolio avg {driver_means[strongest]:.0f}). '
+            f'<strong>Most scenario-sensitive:</strong> {most_sensitive} '
+            f'(CI spread {mc_spreads.get(most_sensitive, 0):.1f}pp).'
+            f'</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     c1, c2 = st.columns([3, 2])
@@ -1251,7 +1872,8 @@ def tab_overview(rdf, adf, mc, sel, sc_name):
             marker_colors=[RISK_COLORS.get(r, "#666") for r in dist.index],
             textinfo="label+value", textfont_size=13))
         fig_pie.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
-                              paper_bgcolor=COLORS["bg"], showlegend=False)
+                              paper_bgcolor=T["chart_paper"], showlegend=False,
+                              font=dict(color=T["chart_text"]))
         st.plotly_chart(fig_pie, use_container_width=True)
 
         st.subheader("Top Risk Alerts")
@@ -1261,7 +1883,8 @@ def tab_overview(rdf, adf, mc, sel, sc_name):
                 f'<div class="{cls}"><strong>{row["country"]}</strong> -- '
                 f'Score: {row["overall"]:.1f} ({row["rating"]})<br>'
                 f'<small>Structural: {row["structural"]:.0f} | Anomaly: {row["anomaly"]:.0f} | '
-                f'MC Leak: {row["mc_leak"]:.0f} | Gov Gap: {row["governance"]:.0f}</small></div>',
+                f'<abbr title="{GLOSSARY["MC Leak"]}">MC Leak</abbr>: {row["mc_leak"]:.0f} | '
+                f'<abbr title="{GLOSSARY["Gov Gap"]}">Gov Gap</abbr>: {row["governance"]:.0f}</small></div>',
                 unsafe_allow_html=True)
 
     st.markdown("---")
@@ -1293,11 +1916,13 @@ def tab_country(rdf, adf, tdf, mc, gov_df, sel, sc_name, n_sim):
         st.metric("Overall Score", f"{cr['overall']:.1f}/100")
 
     cols = st.columns(4)
-    for col, (lab, val) in zip(cols, [
-        ("Structural", cr["structural"]), ("Anomaly", cr["anomaly"]),
-        ("MC Leakage", cr["mc_leak"]), ("Governance Gap", cr["governance"])
+    for col, (lab, val, hlp) in zip(cols, [
+        ("Structural", cr["structural"], "Composite of port exposure, governance gap, customs weakness, EPA value, manufacturing cover, and HS exposure"),
+        ("Anomaly", cr["anomaly"], "Weighted composite from spike detection, capacity mismatch, origin shift correlation, and import/export ratio analysis"),
+        ("MC Leakage", cr["mc_leak"], GLOSSARY["MC Leak"]),
+        ("Gov Gap", cr["governance"], GLOSSARY["Gov Gap"]),
     ]):
-        col.metric(lab, f"{val:.1f}")
+        col.metric(lab, f"{val:.1f}", help=hlp)
 
     st.markdown("---")
     c1, c2 = st.columns(2)
@@ -1319,6 +1944,9 @@ def tab_country(rdf, adf, tdf, mc, gov_df, sel, sc_name, n_sim):
                        "spike_flag", "cap_flag", "origin_flag"]].copy()
         display.columns = ["HS Category", "Export (USD)", "Score", "Risk",
                            "Spike", "Capacity", "Origin Shift"]
+        # Replace boolean checkboxes with readable text indicators
+        for col in ["Spike", "Capacity", "Origin Shift"]:
+            display[col] = display[col].map({True: "Yes", False: "—"})
         st.dataframe(display, use_container_width=True, hide_index=True)
 
     c1, c2 = st.columns(2)
@@ -1374,7 +2002,10 @@ def tab_compare(rdf, adf, sel):
     st.caption("Countries with correlated anomaly patterns suggesting coordinated or cascading circumvention.")
     spdf = spillover_corridors(adf, sel)
     if len(spdf) > 0:
-        st.dataframe(spdf.head(20), use_container_width=True, hide_index=True)
+        spdf_disp = spdf.head(20).copy()
+        if "Same Region" in spdf_disp.columns:
+            spdf_disp["Same Region"] = spdf_disp["Same Region"].map({True: "Yes", False: "No"})
+        st.dataframe(spdf_disp, use_container_width=True, hide_index=True)
     else:
         st.info("No significant spillover corridors detected.")
 
@@ -1431,15 +2062,22 @@ def tab_simulate(sel, mc, n_sim):
 
     st.markdown("---")
     st.subheader("Custom Scenario")
+    st.caption("All levers start at 0.0 (neutral baseline). The predefined Baseline scenario "
+               "uses AfCFTA Liberalization = 0.3 to reflect current trajectory assumptions.")
     c1, c2, c3 = st.columns(3)
     with c1:
-        cr = st.slider("Rerouting Pressure", 0.0, 1.0, 0.0, 0.05, key="cust_r")
-        ca = st.slider("AfCFTA Liberalization", 0.0, 1.0, 0.3, 0.05, key="cust_a")
+        cr = st.slider("Rerouting Pressure", 0.0, 1.0, 0.0, 0.05, key="cust_r",
+                        help="External supply-chain shock pushing trade through EPA corridors")
+        ca = st.slider("AfCFTA Liberalization", 0.0, 1.0, 0.0, 0.05, key="cust_a",
+                        help="Degree of intra-African trade opening under AfCFTA")
     with c2:
-        ce = st.slider("EPA Tightening", 0.0, 1.0, 0.0, 0.05, key="cust_e")
-        cd = st.slider("Digital Traceability", 0.0, 1.0, 0.0, 0.05, key="cust_d")
+        ce = st.slider("EPA Tightening", 0.0, 1.0, 0.0, 0.05, key="cust_e",
+                        help="Increase in EU Rules of Origin enforcement stringency")
+        cd = st.slider("Digital Traceability", 0.0, 1.0, 0.0, 0.05, key="cust_d",
+                        help="Deployment of electronic origin verification systems")
     with c3:
-        ch = st.slider("Regional Harmonization", 0.0, 1.0, 0.0, 0.05, key="cust_h")
+        ch = st.slider("Regional Harmonization", 0.0, 1.0, 0.0, 0.05, key="cust_h",
+                        help="AfCFTA Rules of Origin harmonization across EPA groups")
 
     if st.button("Run Custom Scenario", type="primary"):
         csc = Scenario("Custom", cr, ca, ce, cd, ch)
@@ -1452,33 +2090,156 @@ def tab_simulate(sel, mc, n_sim):
 
 # ─── Tab: Policy ──────────────────────────────────────────────────────────
 
-def tab_policy(rdf, adf, mc, sel, sc_name):
-    st.subheader("Policy Recommendations")
+def tab_policy(rdf, adf, mc, sel, sc_name, gov_df=None):
+    # ── 1. Situation Summary ─────────────────────────────────────────
+    st.subheader("Policy Intelligence")
     sh = st.selectbox("Briefing for:", ["AfCFTA Secretariat", "EU DG Trade"], key="sh_sel")
     st.markdown(stakeholder_summary(rdf, sh))
 
+    # Top-level analytical summary
+    nc = len(rdf[rdf["rating"] == "Critical"])
+    nh = len(rdf[rdf["rating"] == "High"])
+    if len(rdf) > 0:
+        top = rdf.iloc[0]
+        avg_leak = np.mean([r.get("final_leak_mean", 0) for r in mc.values()]) * 100
+        # Identify strongest driver across the portfolio
+        driver_means = {"structural": rdf["structural"].mean(),
+                        "anomaly": rdf["anomaly"].mean(),
+                        "mc_leak": rdf["mc_leak"].mean(),
+                        "governance": rdf["governance"].mean()}
+        strongest = max(driver_means, key=driver_means.get)
+        st.markdown(
+            f'<div class="briefing-box">'
+            f'<strong>Situation summary.</strong> '
+            f'{nc + nh} of {len(rdf)} countries show Critical or High risk under the '
+            f'{sc_name} scenario. The dominant portfolio-level driver is '
+            f'{strongest.replace("_", " ")} (avg {driver_means[strongest]:.0f}/100). '
+            f'Mean simulated leakage across selected countries: {avg_leak:.1f}%. '
+            f'Highest single-country risk: {top["country"]} ({top["overall"]:.1f}, {top["rating"]}).'
+            f'</div>', unsafe_allow_html=True)
+
+    # ── 2. Country Recommendation & Reasoning ────────────────────────
     st.markdown("---")
-    st.subheader("Country Policy Menu")
+    st.subheader("Country Recommendation & Reasoning")
     pc = st.selectbox("Country:", sel, key="pol_c")
     cr = rdf[rdf["country"] == pc]
-    if len(cr) > 0:
-        recs = policy_recommendations(pc, cr.iloc[0].to_dict(), adf)
-        for pri in (1, 2, 3):
-            pr = [r for r in recs if r["Priority"] == pri]
-            if pr:
-                labels = {1: "Priority 1: Urgent", 2: "Priority 2: Structural", 3: "Priority 3: Medium-Term"}
-                st.markdown(f"#### {labels[pri]}")
-                for r in pr:
-                    with st.expander(f"{r['Category']}: {r['Recommendation'][:80]}..."):
-                        st.markdown(f"**Recommendation**: {r['Recommendation']}")
-                        st.markdown(f"**Stakeholder**: {r['Stakeholder']}")
-                        st.markdown(f"**Impact**: {r['Impact']}")
+    if len(cr) == 0:
+        st.info("No data for selected country.")
+        return
+    cr_dict = cr.iloc[0].to_dict()
+    mc_res = mc.get(pc, {})
 
-        rec_df = pd.DataFrame(recs)
-        csv = rec_df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Recommendations (CSV)", csv,
-                           f"policy_{pc.lower().replace(' ', '_')}.csv", "text/csv")
+    # Generate recommendation from rules engine
+    rec = recommendation_rules_engine(pc, cr_dict, mc_res, adf)
+    trace = recommendation_trace(pc, cr_dict, mc_res, adf, rec)
+    flip = counterfactual_flip(cr_dict, rec)
+    comparison = intervention_comparison(rec, cr_dict)
 
+    # Recommendation summary box
+    priority_colors = {"urgent": "#DC2626", "elevated": "#F59E0B",
+                       "standard": "#3B82F6", "routine": "#10B981"}
+    pri_color = priority_colors.get(rec["intervention_priority"], "#666")
+    st.markdown(
+        f'<div class="briefing-box">'
+        f'<strong>Recommendation: {rec["recommendation_category"]}</strong> '
+        f'<span style="background:{pri_color};color:white;padding:2px 8px;'
+        f'border-radius:3px;font-size:0.8rem;margin-left:8px;">'
+        f'{rec["intervention_priority"].upper()}</span> '
+        f'<span style="opacity:0.7;font-size:0.82rem;margin-left:8px;">'
+        f'Confidence: {rec["confidence_qualifier"]}</span><br><br>'
+        f'{rec["recommendation_rationale"]}'
+        f'</div>', unsafe_allow_html=True)
+
+    # ── Reasoning trace ──────────────────────────────────────────────
+    with st.expander("Reasoning trace — why this recommendation"):
+        st.markdown(f"**Overall risk tier:** {trace['overall_risk_tier']}")
+        st.markdown(f"**Rules triggered:** {', '.join(trace['triggered_rules'])}")
+        st.markdown(f"**Confidence band:** {trace['confidence_band']}")
+        st.markdown("**Dominant structural drivers:** " +
+                    ", ".join(trace["dominant_structural_drivers"]))
+        st.markdown("**Anomaly signals:** " +
+                    "; ".join(trace["dominant_anomaly_drivers"]))
+        st.markdown("**Simulation drivers:** " +
+                    "; ".join(trace["dominant_simulation_drivers"]))
+        st.markdown(f"**Governance position:** {trace['dominant_governance_driver']}")
+
+    # ── Counterfactual flip ──────────────────────────────────────────
+    with st.expander("Counterfactual — what would change this recommendation"):
+        st.markdown(f"**Robustness:** {flip['robustness'].title()} "
+                    f"(margin: {flip['margin_points']} pts)")
+        st.markdown(f"**Most decisive factor:** "
+                    f"{flip['most_decisive_factor'].replace('_', ' ')}")
+        st.markdown(f"**To downgrade:** {flip['downgrade_condition']}")
+        st.markdown(f"**To escalate:** {flip['escalation_condition']}")
+        st.markdown(f"_{flip['explanation']}_")
+
+    # ── Intervention comparison ──────────────────────────────────────
+    with st.expander("Intervention comparison — primary vs. secondary"):
+        c1, c2 = st.columns(2)
+        for col, label, attrs in [(c1, "Primary", comparison["primary"]),
+                                   (c2, "Secondary", comparison["secondary"])]:
+            with col:
+                st.markdown(f"**{label}: {attrs['label']}**")
+                st.caption(attrs["description"])
+                st.markdown(f"- Risk reduction: {attrs['expected_risk_reduction']}")
+                st.markdown(f"- Difficulty: {attrs['implementation_difficulty']}")
+                st.markdown(f"- Speed: {attrs['deployment_speed']}")
+                st.markdown(f"- False-positive exposure: {attrs['false_positive_exposure']}")
+        st.markdown(f"**Why primary is preferred:** {comparison['why_primary_preferred']}")
+        st.markdown(f"**When not to use primary:** {comparison['when_not_to_use_primary']}")
+
+    # ── Monitoring thresholds ────────────────────────────────────────
+    st.caption(f"Escalation: {rec['escalation_threshold_note']}")
+    st.caption(f"Monitoring: {rec['monitoring_threshold_note']}")
+
+    # ── 3. Detailed Policy Menu (existing recommendations) ───────────
+    st.markdown("---")
+    st.subheader("Detailed Policy Menu")
+    recs = policy_recommendations(pc, cr_dict, adf)
+    for pri in (1, 2, 3):
+        pr = [r for r in recs if r["Priority"] == pri]
+        if pr:
+            labels = {1: "Priority 1: Urgent", 2: "Priority 2: Structural",
+                      3: "Priority 3: Medium-Term"}
+            st.markdown(f"#### {labels[pri]}")
+            for r in pr:
+                header = f"{r['Category']}: {r['Recommendation'][:90]}"
+                if len(r['Recommendation']) > 90:
+                    header += "…"
+                with st.expander(header):
+                    st.markdown(f"**Recommendation**: {r['Recommendation']}")
+                    st.markdown(f"**Stakeholder**: {r['Stakeholder']}")
+                    st.markdown(f"**Expected impact**: {r['Impact']}")
+
+    rec_df = pd.DataFrame(recs)
+    csv = rec_df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Recommendations (CSV)", csv,
+                       f"policy_{pc.lower().replace(' ', '_')}.csv", "text/csv")
+
+    # ── 4. Scenario Causal Interpretation ────────────────────────────
+    st.markdown("---")
+    st.subheader("Scenario Causal Pathways")
+    st.caption("How each policy lever affects the model, derived from the scenario engine.")
+    sc = SCENARIOS[sc_name]
+    active_levers = []
+    for attr, cmap in SCENARIO_CAUSAL_MAP.items():
+        val = getattr(sc, attr, 0.0)
+        if val > 0.05:
+            active_levers.append((attr, val, cmap))
+    if active_levers:
+        for attr, val, cmap in active_levers:
+            with st.expander(f"{cmap['label']} ({val:.1f})"):
+                st.markdown(f"**Policy lever:** {cmap['policy_lever']}")
+                st.markdown(f"**Transmission:** {cmap['transmission']}")
+                st.markdown(f"**Interpretation:** {cmap['policy_interpretation']}")
+                st.markdown("**Affects:**")
+                for comp, direction, strength in cmap["affects"]:
+                    st.markdown(f"- {comp.replace('_', ' ').title()}: "
+                                f"{direction} ({strength})")
+    else:
+        st.caption("Baseline scenario — no active policy levers beyond current trajectory.")
+
+    # ── 5. Regional Brief ────────────────────────────────────────────
     st.markdown("---")
     st.subheader("Regional Brief")
     reg = st.selectbox("Region:", list(REGION_CLUSTERS.keys()), key="pol_reg")
@@ -1488,9 +2249,9 @@ def tab_policy(rdf, adf, mc, sel, sc_name):
         avg = reg_data["overall"].mean()
         hi = reg_data.loc[reg_data["overall"].idxmax()]
         lo = reg_data.loc[reg_data["overall"].idxmin()]
-        st.markdown(f"""### {reg} -- Risk Assessment
-**Avg risk**: {avg:.1f}/100 | **Highest**: {hi['country']} ({hi['overall']:.1f}) | **Lowest**: {lo['country']} ({lo['overall']:.1f})
-""")
+        st.markdown(f"**Avg risk**: {avg:.1f}/100 | "
+                    f"**Highest**: {hi['country']} ({hi['overall']:.1f}) | "
+                    f"**Lowest**: {lo['country']} ({lo['overall']:.1f})")
         for _, r in reg_data.iterrows():
             st.markdown(f"- **{r['country']}**: {r['rating']} ({r['overall']:.1f})")
 
@@ -1520,7 +2281,12 @@ def tab_data(tdf, adf, rdf, mc, sc_name):
         cols = ["reporter", "partner", "hs_desc", "year", "export_usd", "anomaly_score", "risk_level",
                 "spike_flag", "cap_flag", "origin_flag"]
         avail = [c for c in cols if c in f.columns]
-        st.dataframe(f[avail].head(500), use_container_width=True, hide_index=True)
+        disp_a = f[avail].head(500).copy()
+        # Replace boolean checkboxes with readable text
+        for bc in ["spike_flag", "cap_flag", "origin_flag"]:
+            if bc in disp_a.columns:
+                disp_a[bc] = disp_a[bc].map({True: "Yes", False: "—"})
+        st.dataframe(disp_a, use_container_width=True, hide_index=True)
         st.download_button("Download CSV", f[avail].to_csv(index=False).encode(), "anomaly_data.csv", "text/csv")
 
     elif view == "Trade Flows":
@@ -1544,7 +2310,7 @@ def tab_data(tdf, adf, rdf, mc, sc_name):
     nh = len(rdf[rdf["rating"] == "High"])
     nm = len(rdf[rdf["rating"] == "Moderate"])
     nl = len(rdf[rdf["rating"] == "Low"])
-    txt = f"""Africa Rules-of-Origin Circumvention Platform - EXECUTIVE SUMMARY
+    txt = f"""EU-Africa Trade Circumvention Simulator - EXECUTIVE SUMMARY
 Scenario: {sc_name}
 Countries: {len(rdf)} | Critical: {nc} | High: {nh} | Moderate: {nm} | Low: {nl}
 
@@ -1566,31 +2332,34 @@ TOP RISKS:
 def main():
     sel, z_th, cap_th, n_sim, sc_name = render_sidebar()
     if not sel:
-        st.warning("Select at least one country from the sidebar.")
+        st.info("Select at least one country from the sidebar to begin analysis.")
         return
 
-    with st.spinner("Running analysis pipeline..."):
+    with st.spinner("Running analysis pipeline — this may take a moment for large selections."):
         tdf, gov_df, adf, mc, rdf = load_all(tuple(sorted(sel)), z_th, cap_th, n_sim, sc_name)
 
-    st.title("EU-Africa Trade Circumvention Simulator")
+    # Single page title — rendered once only
+    st.markdown("## EU-Africa Trade Circumvention Simulator")
     sc = SCENARIOS[sc_name]
-    st.markdown(f"**Scenario**: {sc.name} | **Countries**: {len(sel)} | **MC Iterations**: {n_sim:,}")
+    st.caption(f"Scenario: {sc_name}  ·  Countries: {len(sel)}  ·  MC iterations: {n_sim:,}")
 
+    # Shortened tab labels to prevent overflow at default viewport
     t1, t2, t3, t4, t5, t6 = st.tabs([
-        "Overview", "Country Deep-Dive", "Comparative",
-        "Simulation Lab", "Policy Menu", "Data Explorer"])
+        "Overview", "Country", "Compare",
+        "Simulate", "Policy", "Data"])
 
     with t1: tab_overview(rdf, adf, mc, sel, sc_name)
     with t2: tab_country(rdf, adf, tdf, mc, gov_df, sel, sc_name, n_sim)
     with t3: tab_compare(rdf, adf, sel)
     with t4: tab_simulate(sel, mc, n_sim)
-    with t5: tab_policy(rdf, adf, mc, sel, sc_name)
+    with t5: tab_policy(rdf, adf, mc, sel, sc_name, gov_df)
     with t6: tab_data(tdf, adf, rdf, mc, sc_name)
 
     st.markdown("---")
-    st.markdown('<div class="footer">EU-Africa Trade Circumvention Simulator | Open-Source Simulation Tool | '
-                'Data: UN Comtrade, World Bank WGI, EU Access2Markets, AfCFTA e-Tariff Book | '
-                'MC calibration: EPPO/OLAF enforcement statistics</div>', unsafe_allow_html=True)
+    st.markdown('<div class="footer">EU-Africa Trade Circumvention Simulator · '
+                'Policy Intelligence Prototype · '
+                'Data calibrated to: UN Comtrade, World Bank WGI, EU Access2Markets, '
+                'AfCFTA e-Tariff Book, EPPO/OLAF</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
