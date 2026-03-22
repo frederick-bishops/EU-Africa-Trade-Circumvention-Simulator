@@ -174,6 +174,27 @@ h3 { color: var(--text-color); font-weight: 600; font-size: 1.05rem; }
 """, unsafe_allow_html=True)
 
 
+# ── Glossary for technical terms ──────────────────────────────────────
+GLOSSARY = {
+    "MC Leak": "Monte Carlo Leakage — simulated rate of undetected circumvention from the behavioral model",
+    "Gov Gap": "Governance Gap — inverse of customs effectiveness and institutional quality (higher = weaker)",
+    "RoO": "Rules of Origin — criteria goods must meet to qualify for preferential tariff treatment",
+    "DFQF": "Duty-Free Quota-Free — full preferential access to the EU market under EPA terms",
+    "EPA": "Economic Partnership Agreement — trade arrangement between EU and African regional groups",
+    "HS code": "Harmonized System code — international product classification for customs declarations",
+    "AfCFTA": "African Continental Free Trade Area — pan-African trade liberalization framework",
+    "CI": "Confidence Interval — statistical range reflecting simulation uncertainty",
+    "WGI": "World Governance Indicators — World Bank institutional quality metrics",
+    "REX": "Registered Exporter system — EU self-certification scheme for origin declarations",
+    "OLAF": "European Anti-Fraud Office — investigates fraud against the EU budget",
+}
+
+
+def _glossary_help(term: str) -> str:
+    """Return glossary definition for use in help= parameters."""
+    return GLOSSARY.get(term, "")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # SECTION 2: EMBEDDED COUNTRY DATA
 # ═══════════════════════════════════════════════════════════════════════
@@ -1343,16 +1364,17 @@ def tab_overview(rdf, adf, mc, sel, sc_name):
     avg_l = np.mean([r["final_leak_mean"] for r in mc.values()]) * 100
     eu_exp = adf[(adf["partner"] == "EU27") & (adf["year"] == adf["year"].max())]["export_usd"].sum()
 
-    cols = st.columns(5)
-    for col, (lab, val) in zip(cols, [
-        ("Countries", str(len(sel))),
-        ("Critical + High", f"{nc + nh}"),
-        ("Avg Risk Score", f"{avg_r:.1f}"),
-        ("Avg Leakage", f"{avg_l:.1f}%"),
-        ("EU Exports (latest)", fmt_usd(eu_exp)),
-    ]):
-        col.markdown(f'<div class="kpi-card"><div class="kpi-val">{val}</div>'
-                     f'<div class="kpi-lab">{lab}</div></div>', unsafe_allow_html=True)
+    # KPI row: flex-wrap layout prevents clipping at narrow viewports
+    kpis = [("Countries Analyzed", str(len(sel))),
+            ("Critical + High", f"{nc + nh}"),
+            ("Avg Risk Score", f"{avg_r:.1f}"),
+            ("Avg MC Leakage", f"{avg_l:.1f}%"),
+            ("EU Exports (latest yr)", fmt_usd(eu_exp))]
+    kpi_html = '<div class="kpi-row">' + "".join(
+        f'<div class="kpi-card"><div class="kpi-val">{val}</div>'
+        f'<div class="kpi-lab">{lab}</div></div>' for lab, val in kpis
+    ) + '</div>'
+    st.markdown(kpi_html, unsafe_allow_html=True)
 
     st.markdown("---")
     c1, c2 = st.columns([3, 2])
@@ -1367,7 +1389,8 @@ def tab_overview(rdf, adf, mc, sel, sc_name):
             marker_colors=[RISK_COLORS.get(r, "#666") for r in dist.index],
             textinfo="label+value", textfont_size=13))
         fig_pie.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
-                              paper_bgcolor=COLORS["bg"], showlegend=False)
+                              paper_bgcolor=T["chart_paper"], showlegend=False,
+                              font=dict(color=T["chart_text"]))
         st.plotly_chart(fig_pie, use_container_width=True)
 
         st.subheader("Top Risk Alerts")
@@ -1435,6 +1458,9 @@ def tab_country(rdf, adf, tdf, mc, gov_df, sel, sc_name, n_sim):
                        "spike_flag", "cap_flag", "origin_flag"]].copy()
         display.columns = ["HS Category", "Export (USD)", "Score", "Risk",
                            "Spike", "Capacity", "Origin Shift"]
+        # Replace boolean checkboxes with readable text indicators
+        for col in ["Spike", "Capacity", "Origin Shift"]:
+            display[col] = display[col].map({True: "Yes", False: "—"})
         st.dataframe(display, use_container_width=True, hide_index=True)
 
     c1, c2 = st.columns(2)
@@ -1547,15 +1573,22 @@ def tab_simulate(sel, mc, n_sim):
 
     st.markdown("---")
     st.subheader("Custom Scenario")
+    st.caption("All levers start at 0.0 (neutral baseline). The predefined Baseline scenario "
+               "uses AfCFTA Liberalization = 0.3 to reflect current trajectory assumptions.")
     c1, c2, c3 = st.columns(3)
     with c1:
-        cr = st.slider("Rerouting Pressure", 0.0, 1.0, 0.0, 0.05, key="cust_r")
-        ca = st.slider("AfCFTA Liberalization", 0.0, 1.0, 0.3, 0.05, key="cust_a")
+        cr = st.slider("Rerouting Pressure", 0.0, 1.0, 0.0, 0.05, key="cust_r",
+                        help="External supply-chain shock pushing trade through EPA corridors")
+        ca = st.slider("AfCFTA Liberalization", 0.0, 1.0, 0.0, 0.05, key="cust_a",
+                        help="Degree of intra-African trade opening under AfCFTA")
     with c2:
-        ce = st.slider("EPA Tightening", 0.0, 1.0, 0.0, 0.05, key="cust_e")
-        cd = st.slider("Digital Traceability", 0.0, 1.0, 0.0, 0.05, key="cust_d")
+        ce = st.slider("EPA Tightening", 0.0, 1.0, 0.0, 0.05, key="cust_e",
+                        help="Increase in EU Rules of Origin enforcement stringency")
+        cd = st.slider("Digital Traceability", 0.0, 1.0, 0.0, 0.05, key="cust_d",
+                        help="Deployment of electronic origin verification systems")
     with c3:
-        ch = st.slider("Regional Harmonization", 0.0, 1.0, 0.0, 0.05, key="cust_h")
+        ch = st.slider("Regional Harmonization", 0.0, 1.0, 0.0, 0.05, key="cust_h",
+                        help="AfCFTA Rules of Origin harmonization across EPA groups")
 
     if st.button("Run Custom Scenario", type="primary"):
         csc = Scenario("Custom", cr, ca, ce, cd, ch)
@@ -1636,7 +1669,12 @@ def tab_data(tdf, adf, rdf, mc, sc_name):
         cols = ["reporter", "partner", "hs_desc", "year", "export_usd", "anomaly_score", "risk_level",
                 "spike_flag", "cap_flag", "origin_flag"]
         avail = [c for c in cols if c in f.columns]
-        st.dataframe(f[avail].head(500), use_container_width=True, hide_index=True)
+        disp_a = f[avail].head(500).copy()
+        # Replace boolean checkboxes with readable text
+        for bc in ["spike_flag", "cap_flag", "origin_flag"]:
+            if bc in disp_a.columns:
+                disp_a[bc] = disp_a[bc].map({True: "Yes", False: "—"})
+        st.dataframe(disp_a, use_container_width=True, hide_index=True)
         st.download_button("Download CSV", f[avail].to_csv(index=False).encode(), "anomaly_data.csv", "text/csv")
 
     elif view == "Trade Flows":
@@ -1660,7 +1698,7 @@ def tab_data(tdf, adf, rdf, mc, sc_name):
     nh = len(rdf[rdf["rating"] == "High"])
     nm = len(rdf[rdf["rating"] == "Moderate"])
     nl = len(rdf[rdf["rating"] == "Low"])
-    txt = f"""Africa Rules-of-Origin Circumvention Platform - EXECUTIVE SUMMARY
+    txt = f"""EU-Africa Trade Circumvention Simulator - EXECUTIVE SUMMARY
 Scenario: {sc_name}
 Countries: {len(rdf)} | Critical: {nc} | High: {nh} | Moderate: {nm} | Low: {nl}
 
